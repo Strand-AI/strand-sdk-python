@@ -2,6 +2,8 @@
 
 Python client for the [Strand Platform](https://strandai.com) — H&E → multiplex protein inference.
 
+**Agent-friendly docs:** The full API reference is published as Markdown at [https://app.strandai.com/docs/api.md](https://app.strandai.com/docs/api.md), and the LLM index lives at [https://app.strandai.com/llms.txt](https://app.strandai.com/llms.txt).
+
 ```bash
 pip install strand-sdk
 # or with bioinformatics extras (AnnData / zarr):
