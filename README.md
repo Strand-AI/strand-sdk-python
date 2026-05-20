@@ -12,11 +12,35 @@ pip install "strand-sdk[anndata]"
 
 ## Quickstart
 
+One blocking call runs the full pipeline — upload, submit, wait, download:
+
 ```python
 from strand import Client
 
-client = Client()  # reads STRAND_API_KEY
+client = Client(api_key="sk-strand-...")
+result = client.predict(
+    "biopsy.ome.tiff",
+    markers=["HER2", "CD8", "PD1"],
+    output_dir="./outputs/",
+)
+print(f"Used {result.credits_used} credits; wrote {len(result.marker_outputs)} markers")
+```
 
+`client.predict(...)` returns a `PredictResult` with `job_id`, `status`,
+`credits_used`, `marker_outputs` (paths under `output_dir`), and `results`
+(a `JobResults` handle for selective reads). It raises `JobFailedError` if the
+job fails, `JobTimeoutError` if the deadline elapses, and surfaces
+`InsufficientCreditsError` / `RateLimitError` on submit issues.
+
+Pass `on_progress=lambda stage, frac: ...` to follow the four stages
+(`"upload"`, `"submit"`, `"wait"`, `"download"`).
+
+### Lower-level primitives
+
+`client.predict` is also a namespace, so the underlying steps stay available
+for fine-grained control:
+
+```python
 upload = client.uploads.upload_file("slide.svs")
 estimate = client.predict.estimate(upload.id, markers=["CD3", "CD8", "Ki67"])
 print(f"Will cost ≈ {estimate.estimated_credits} credits")
@@ -41,7 +65,7 @@ src/strand/
   __init__.py        public surface re-exports
   _client.py         Client (top-level)
   _uploads.py        uploads namespace (incl. resumable chunked upload helper)
-  _predict.py        predict namespace
+  _predict.py        predict namespace — `client.predict(...)` (full pipeline) + `.estimate` / `.submit`
   _jobs.py           Job (wait / stream_events / download_results)
   _results.py        OME-Zarr v3 download + AnnData conversion
   _models.py         user-facing snake_case dataclasses

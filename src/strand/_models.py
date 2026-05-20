@@ -8,9 +8,13 @@ ergonomic surface is fully PEP 8.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ._results import JobResults
 
 
 def _parse_dt(raw: str | None) -> datetime | None:
@@ -114,3 +118,30 @@ class JobStatus:
     @property
     def is_terminal(self) -> bool:
         return self.status in {"completed", "failed"}
+
+
+@dataclass(frozen=True, slots=True)
+class PredictResult:
+    """Outcome of a one-shot `client.predict(...)` call.
+
+    Attributes:
+        job_id: Backend job identifier.
+        status: Terminal job status — always `"completed"` for a returned
+            `PredictResult` (failures raise `JobFailedError` before this is built).
+        credits_used: Credits the platform reserved for the job.
+        marker_outputs: When `output_dir` was provided, maps each predicted
+            marker name to its local subdirectory under `output_dir/markers/`.
+            Empty dict otherwise — call `.results.to_anndata()` or
+            `.results.to_array(name=...)` to materialize in-memory tensors.
+        output_dir: The directory results were written to, or `None` if not
+            downloaded.
+        results: The underlying `JobResults` handle; use for selective reads
+            (per-marker arrays, full zarr metadata, etc.).
+    """
+
+    job_id: str
+    status: str
+    credits_used: int
+    marker_outputs: dict[str, Path] = field(default_factory=dict)
+    output_dir: Path | None = None
+    results: JobResults | None = None

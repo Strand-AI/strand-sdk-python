@@ -1,9 +1,18 @@
 """Strand Platform Python SDK.
 
-Quickstart:
+Quickstart — one-call pipeline:
 
     >>> from strand import Client
     >>> client = Client()  # reads STRAND_API_KEY
+    >>> result = client.predict(
+    ...     "slide.svs",
+    ...     markers=["CD3", "CD8"],
+    ...     output_dir="./outputs/",
+    ... )
+    >>> print(f"used {result.credits_used} credits")
+
+Lower-level primitives stay available for fine-grained control:
+
     >>> upload = client.uploads.upload_file("slide.svs")
     >>> job = client.predict.submit(upload.id, markers=["CD3", "CD8"])
     >>> job.wait()
@@ -27,7 +36,7 @@ from ._errors import (
     UploadError,
 )
 from ._jobs import Job, JobEvent
-from ._models import Estimate, JobStatus, Upload
+from ._models import Estimate, JobStatus, PredictResult, Upload
 from ._results import JobResults
 
 __all__ = [
@@ -43,6 +52,7 @@ __all__ = [
     "JobStatus",
     "JobTimeoutError",
     "NotFoundError",
+    "PredictResult",
     "RateLimitError",
     "StrandError",
     "Upload",

@@ -42,8 +42,18 @@ class Client:
             override the client's `Authorization` header — if you pass one,
             wire auth headers yourself.
 
-    Example:
+    Example — one-call pipeline:
+
         >>> client = Client(api_key="sk-strand-...")
+        >>> result = client.predict(
+        ...     "slide.svs",
+        ...     markers=["CD3", "CD8"],
+        ...     output_dir="./outputs/",
+        ... )
+        >>> print(f"used {result.credits_used} credits")
+
+    Lower-level primitives (`client.predict` is also a namespace):
+
         >>> upload = client.uploads.upload_file("slide.svs")
         >>> estimate = client.predict.estimate(upload.id, markers=["CD3"])
         >>> job = client.predict.submit(upload.id, markers=["CD3"])
