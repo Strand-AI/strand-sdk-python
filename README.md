@@ -114,12 +114,12 @@ uv run mypy src
 
 ## Issues & contributing
 
-This SDK is published from a read-only public mirror of an internal monorepo.
-File bug reports and feature requests on the mirror's issue tracker:
-[github.com/Strand-AI/strand-sdk-python/issues](https://github.com/Strand-AI/strand-sdk-python/issues).
+File bug reports and feature requests at
+[Strand-AI/strand-sdk-python/issues](https://github.com/Strand-AI/strand-sdk-python/issues).
 
-The mirror doesn't accept pull requests directly — changes land in the
-internal monorepo and are synced here automatically on every release.
+We don't accept external pull requests on the SDK at this time. If you'd like
+to contribute or have ideas you'd like to discuss, email
+[support@strandai.com](mailto:support@strandai.com).
 
 ## License
 
