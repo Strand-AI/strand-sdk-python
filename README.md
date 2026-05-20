@@ -14,7 +14,7 @@ If your environment can't reach PyPI, you can install directly from the
 repository as a fallback:
 
 ```bash
-pip install "git+https://github.com/Strand-AI/strand-official.git#subdirectory=sdks/python/strand-sdk"
+pip install "git+https://github.com/Strand-AI/strand-sdk-python.git"
 ```
 
 ## Quickstart
@@ -111,6 +111,15 @@ uv run pytest
 uv run ruff check src tests
 uv run mypy src
 ```
+
+## Issues & contributing
+
+This SDK is published from a read-only public mirror of an internal monorepo.
+File bug reports and feature requests on the mirror's issue tracker:
+[github.com/Strand-AI/strand-sdk-python/issues](https://github.com/Strand-AI/strand-sdk-python/issues).
+
+The mirror doesn't accept pull requests directly — changes land in the
+internal monorepo and are synced here automatically on every release.
 
 ## License
 
