@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [
-    { name = "Strand AI", email = "engineering@strandai.bio" },
+    { name = "Strand AI", email = "support@strandai.com" },
 ]
 keywords = ["bioinformatics", "spatial-omics", "pathology", "h&e", "imputation", "anndata", "strand"]
 classifiers = [
@@ -45,9 +45,11 @@ dev = [
 
 [project.urls]
 Homepage = "https://strandai.com"
-Documentation = "https://app.strandai.com/docs/api"
-Source = "https://github.com/strand-ai/strand-official"
-Issues = "https://github.com/strand-ai/strand-official/issues"
+Documentation = "https://docs.strandai.com"
+Repository = "https://github.com/Strand-AI/strand-official"
+Source = "https://github.com/Strand-AI/strand-official"
+Issues = "https://github.com/Strand-AI/strand-official/issues"
+Changelog = "https://github.com/Strand-AI/strand-official/blob/main/sdks/python/strand-sdk/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/strand"]

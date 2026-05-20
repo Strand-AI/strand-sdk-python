@@ -10,6 +10,13 @@ pip install strand-sdk
 pip install "strand-sdk[anndata]"
 ```
 
+If your environment can't reach PyPI, you can install directly from the
+repository as a fallback:
+
+```bash
+pip install "git+https://github.com/Strand-AI/strand-official.git#subdirectory=sdks/python/strand-sdk"
+```
+
 ## Quickstart
 
 One blocking call runs the full pipeline — upload, submit, wait, download:
