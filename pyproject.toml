@@ -46,10 +46,9 @@ dev = [
 [project.urls]
 Homepage = "https://strandai.com"
 Documentation = "https://docs.strandai.com"
-Repository = "https://github.com/Strand-AI/strand-official"
-Source = "https://github.com/Strand-AI/strand-official"
-Issues = "https://github.com/Strand-AI/strand-official/issues"
-Changelog = "https://github.com/Strand-AI/strand-official/blob/main/sdks/python/strand-sdk/CHANGELOG.md"
+# Repository / Source / Issues intentionally omitted while the source monorepo
+# is private. Will be added when the SDK is extracted to a public repo
+# (Strand-AI/strand-sdk). Until then, file issues via support@strandai.com.
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/strand"]
