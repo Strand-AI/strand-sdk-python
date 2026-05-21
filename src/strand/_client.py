@@ -8,6 +8,7 @@ import httpx
 
 from ._http import DEFAULT_TIMEOUT, HttpSession
 from ._predict import Predict
+from ._samples import Samples
 from ._uploads import Uploads
 
 if TYPE_CHECKING:
@@ -75,6 +76,7 @@ class Client:
         self.uploads = Uploads(self._http)
         self.predict = Predict(self._http, self)
         self.jobs = _JobsNamespace(self)
+        self.samples = Samples(self._http)
 
     @property
     def base_url(self) -> str:

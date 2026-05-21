@@ -28,7 +28,7 @@ from ._errors import (
 
 DEFAULT_BASE_URL = "https://app.strandai.com"
 DEFAULT_TIMEOUT = 60.0
-USER_AGENT = "strand-sdk-python/0.1.0"
+USER_AGENT = "strand-sdk-python/0.2.0"
 
 
 class HttpSession:
