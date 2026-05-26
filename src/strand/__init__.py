@@ -33,6 +33,7 @@ from ._errors import (
     NotFoundError,
     RateLimitError,
     StrandError,
+    UnknownMarkerError,
     UploadError,
 )
 from ._jobs import Job, JobEvent
@@ -55,6 +56,7 @@ __all__ = [
     "PredictResult",
     "RateLimitError",
     "StrandError",
+    "UnknownMarkerError",
     "Upload",
     "UploadError",
 ]

@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ._errors import StrandError
 from ._models import Estimate, PredictResult
 
 if TYPE_CHECKING:
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
     from ._jobs import Job
 
 
-ProgressCb = Callable[[str, float | None], None]
+ProgressCb = Callable[[str, float], None]
 
 
 def _coerce_markers(markers: Iterable[str]) -> list[str]:
@@ -88,7 +89,9 @@ class Predict:
             poll_interval_sec: Status-poll cadence when SSE drops out.
             on_progress: Optional `(stage, fraction)` callback. `stage` is
                 one of `"upload"`, `"submit"`, `"wait"`, `"download"`.
-                `fraction` is `0.0-1.0` where known, else `None`.
+                `fraction` is always a float in `[0.0, 1.0]` — `0.0` at the
+                start of each stage and `1.0` at its end, with intermediate
+                values where the underlying step exposes progress.
 
         Returns:
             `PredictResult` with `job_id`, `status="completed"`, `credits_used`,
@@ -100,6 +103,11 @@ class Predict:
             JobFailedError: If the job terminates in `"failed"` state.
             InsufficientCreditsError, RateLimitError, NotFoundError: Per-step
                 from the underlying primitives.
+
+        Errors raised after the upload step succeeds carry the resulting
+        `upload_id` on `StrandError.upload_id`, so callers can resume via
+        `client.predict.submit(upload_id, markers=[...])` without re-uploading
+        the WSI.
         """
         # Validate inputs up-front so we fail before paying for an upload.
         validated_markers = _coerce_markers(markers)
@@ -112,27 +120,35 @@ class Predict:
         report("upload", 0.0)
 
         def _upload_progress(done: int, total: int) -> None:
-            report("upload", done / total if total else None)
+            report("upload", done / total if total else 0.0)
 
         upload = self._client.uploads.upload_file(local_path, progress=_upload_progress)
         report("upload", 1.0)
 
-        report("submit", None)
-        job = self.submit(upload.id, validated_markers)
+        # From here on, any StrandError gets `upload_id` attached so callers
+        # can resume without paying for the re-upload.
+        try:
+            report("submit", 0.0)
+            job = self.submit(upload.id, validated_markers)
+            report("submit", 1.0)
 
-        report("wait", None)
-        status = job.wait(timeout=timeout_sec, poll_interval=poll_interval_sec)
+            report("wait", 0.0)
+            status = job.wait(timeout=timeout_sec, poll_interval=poll_interval_sec)
+            report("wait", 1.0)
 
-        report("download", 0.0 if output_dir is not None else None)
-        results = job.results()
-        marker_outputs: dict[str, Path] = {}
-        out_path: Path | None = None
-        if output_dir is not None:
-            out_path = Path(output_dir)
-            results.download_to(out_path)
-            for name in results.multiscale_names(include_he=False):
-                marker_outputs[name] = out_path / "markers" / name
+            report("download", 0.0)
+            results = job.results()
+            marker_outputs: dict[str, Path] = {}
+            out_path: Path | None = None
+            if output_dir is not None:
+                out_path = Path(output_dir)
+                results.download_to(out_path)
+                for name in results.multiscale_names(include_he=False):
+                    marker_outputs[name] = out_path / "markers" / name
             report("download", 1.0)
+        except StrandError as e:
+            e.upload_id = upload.id
+            raise
 
         return PredictResult(
             job_id=job.id,

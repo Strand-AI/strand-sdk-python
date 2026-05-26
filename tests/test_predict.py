@@ -217,7 +217,7 @@ def test_predict_reports_progress_stages(
 
     _mock_full_pipeline(["CD3"])
 
-    stages: list[tuple[str, float | None]] = []
+    stages: list[tuple[str, float]] = []
     client.predict(
         blob,
         markers=["CD3"],
@@ -227,8 +227,19 @@ def test_predict_reports_progress_stages(
         on_progress=lambda stage, frac: stages.append((stage, frac)),
     )
 
+    # Every stage must be reported with a float — never None — so the callback
+    # contract can rely on `frac` being a real number.
+    for stage, frac in stages:
+        assert isinstance(frac, float), f"stage {stage!r} received non-float frac={frac!r}"
+        assert 0.0 <= frac <= 1.0, f"frac out of range for {stage}: {frac}"
+
     seen_stages = {s for s, _ in stages}
     assert {"upload", "submit", "wait", "download"} <= seen_stages
+    # Each stage must bracket with 0.0 at start and 1.0 at end.
+    for target in ("upload", "submit", "wait", "download"):
+        fracs = [f for s, f in stages if s == target]
+        assert fracs[0] == 0.0, f"stage {target} did not start with 0.0: {fracs}"
+        assert fracs[-1] == 1.0, f"stage {target} did not end with 1.0: {fracs}"
 
 
 @respx.mock
@@ -295,6 +306,99 @@ def test_predict_propagates_job_failure(
     with pytest.raises(strand.JobFailedError) as exc_info:
         client.predict(blob, markers=["CD3"], poll_interval_sec=0.05, timeout_sec=10)
     assert exc_info.value.job_id == JOB_ID
+    # Upload had already completed successfully — recovery path: the upload_id
+    # must be attached to the error so callers can resubmit without re-uploading.
+    assert exc_info.value.upload_id == UPLOAD_ID
+
+
+@respx.mock
+def test_predict_attaches_upload_id_on_submit_failure(
+    client: strand.Client, tmp_path: Path
+) -> None:
+    """If submit fails *after* upload completes, upload_id must surface on the error."""
+    blob = tmp_path / "slide.svs"
+    blob.write_bytes(b"x" * (256 * 1024))
+
+    respx.post(f"{API_ROOT}/uploads").mock(
+        return_value=Response(
+            200,
+            json={
+                "uploadId": UPLOAD_ID,
+                "uploadUrl": GCS_URL,
+                "gcsPath": f"uploads/org/{UPLOAD_ID}/slide.svs",
+            },
+        )
+    )
+    respx.put(GCS_URL).mock(return_value=Response(200))
+    respx.post(f"{API_ROOT}/uploads/{UPLOAD_ID}/complete").mock(
+        return_value=Response(
+            200,
+            json={
+                "uploadId": UPLOAD_ID,
+                "status": "ready",
+                "widthPx": 8,
+                "heightPx": 8,
+                "dimensionsSource": "sharp",
+            },
+        )
+    )
+    # Submit fails with 402 — insufficient credits.
+    respx.post(f"{API_ROOT}/predict").mock(
+        return_value=Response(
+            402,
+            json={"error": "insufficient_credits", "message": "Need 500 credits", "required": 500},
+        )
+    )
+
+    with pytest.raises(strand.InsufficientCreditsError) as exc_info:
+        client.predict(blob, markers=["CD3"], poll_interval_sec=0.05, timeout_sec=10)
+    assert exc_info.value.upload_id == UPLOAD_ID
+    assert exc_info.value.required == 500
+
+
+@respx.mock
+def test_predict_submit_maps_unknown_markers(client: strand.Client) -> None:
+    """Submitting unknown markers surfaces as UnknownMarkerError with the offending names."""
+    respx.post(f"{API_ROOT}/predict").mock(
+        return_value=Response(
+            400,
+            json={
+                "error": "unknown_markers",
+                "message": "Unknown markers: MysteryMarker, AnotherFake",
+                "unknownMarkers": ["MysteryMarker", "AnotherFake"],
+                "knownMarkersSample": ["CD3e", "CD4", "CD8", "Ki67"],
+            },
+        )
+    )
+
+    with pytest.raises(strand.UnknownMarkerError) as exc_info:
+        client.predict.submit("upload-id", markers=["CD3e", "MysteryMarker", "AnotherFake"])
+
+    err = exc_info.value
+    assert err.unknown == ["MysteryMarker", "AnotherFake"]
+    assert err.known_subset is not None
+    assert "CD3e" in err.known_subset
+    # UnknownMarkerError is still a BadRequestError, so generic catch-all works too.
+    assert isinstance(err, strand.BadRequestError)
+
+
+@respx.mock
+def test_predict_estimate_maps_unknown_markers(client: strand.Client) -> None:
+    respx.post(f"{API_ROOT}/predict/estimate").mock(
+        return_value=Response(
+            400,
+            json={
+                "error": "unknown_markers",
+                "message": "Unknown marker: Bogus",
+                "unknownMarkers": ["Bogus"],
+            },
+        )
+    )
+
+    with pytest.raises(strand.UnknownMarkerError) as exc_info:
+        client.predict.estimate("upload-id", markers=["Bogus"])
+    assert exc_info.value.unknown == ["Bogus"]
+    assert exc_info.value.known_subset is None
 
 
 def test_predict_validates_markers(client: strand.Client, tmp_path: Path) -> None:

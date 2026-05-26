@@ -24,6 +24,7 @@ from ._errors import (
     NotFoundError,
     RateLimitError,
     StrandError,
+    UnknownMarkerError,
 )
 
 DEFAULT_BASE_URL = "https://app.strandai.com"
@@ -166,6 +167,23 @@ class HttpSession:
         error_code = body.get("error") if isinstance(body, dict) else None
 
         if resp.status_code == 400:
+            if error_code == "unknown_markers" and isinstance(body, dict):
+                unknown_raw = body.get("unknownMarkers")
+                unknown = (
+                    [str(m) for m in unknown_raw]
+                    if isinstance(unknown_raw, list)
+                    else []
+                )
+                known_raw = body.get("knownMarkersSample")
+                known_subset = (
+                    [str(m) for m in known_raw] if isinstance(known_raw, list) else None
+                )
+                raise UnknownMarkerError(
+                    message,
+                    unknown=unknown,
+                    known_subset=known_subset,
+                    body=body,
+                )
             raise BadRequestError(message, status_code=400, error_code=error_code, body=body)
         if resp.status_code == 401:
             raise AuthError(message, status_code=401, error_code=error_code, body=body)

@@ -40,7 +40,48 @@ job fails, `JobTimeoutError` if the deadline elapses, and surfaces
 `InsufficientCreditsError` / `RateLimitError` on submit issues.
 
 Pass `on_progress=lambda stage, frac: ...` to follow the four stages
-(`"upload"`, `"submit"`, `"wait"`, `"download"`).
+(`"upload"`, `"submit"`, `"wait"`, `"download"`). `frac` is always a float
+in `[0.0, 1.0]` — `0.0` at stage start, `1.0` at stage end, with
+intermediate values where available (e.g. upload byte progress).
+
+### Recovering from a failed pipeline without re-uploading
+
+If `client.predict(...)` raises after the upload step succeeded, the
+resulting `upload_id` is attached to the error so you can resume the job
+without paying to re-upload the WSI:
+
+```python
+from strand import Client, JobFailedError, StrandError
+
+client = Client()
+try:
+    result = client.predict("slide.svs", markers=["CD3", "CD8"])
+except JobFailedError as e:
+    if e.upload_id:
+        # Re-submit against the same upload — no re-upload needed.
+        job = client.predict.submit(e.upload_id, markers=["CD3", "CD8"])
+        job.wait()
+except StrandError as e:
+    # Same idea for `JobTimeoutError`, `InsufficientCreditsError`, etc.
+    if e.upload_id:
+        ...
+```
+
+### Catching unknown markers
+
+`predict.submit` and `predict.estimate` validate marker names against the
+platform's panel before reserving credits or queueing a job. Unknown names
+surface as `UnknownMarkerError` (a `BadRequestError` subclass):
+
+```python
+from strand import UnknownMarkerError
+
+try:
+    client.predict.submit(upload.id, markers=["CD3", "MysteryMarker"])
+except UnknownMarkerError as e:
+    print("Unknown:", e.unknown)              # ["MysteryMarker"]
+    print("Try one of:", e.known_subset[:5])  # sample of valid names
+```
 
 ### Lower-level primitives
 

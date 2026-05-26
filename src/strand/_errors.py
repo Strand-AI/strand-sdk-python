@@ -12,7 +12,18 @@ from typing import Any
 
 
 class StrandError(Exception):
-    """Base class for SDK errors raised against documented API responses."""
+    """Base class for SDK errors raised against documented API responses.
+
+    `upload_id` is set by `client.predict(...)` when an error bubbles out of
+    the pipeline after the upload step succeeded. It lets callers resume the
+    job without re-uploading the WSI:
+
+        try:
+            client.predict("slide.svs", markers=[...])
+        except StrandError as e:
+            if e.upload_id:
+                job = client.predict.submit(e.upload_id, markers=[...])
+    """
 
     def __init__(
         self,
@@ -21,12 +32,14 @@ class StrandError(Exception):
         status_code: int | None = None,
         error_code: str | None = None,
         body: dict[str, Any] | None = None,
+        upload_id: str | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.error_code = error_code
         self.body = body or {}
+        self.upload_id = upload_id
 
 
 class AuthError(StrandError):
@@ -35,6 +48,27 @@ class AuthError(StrandError):
 
 class BadRequestError(StrandError):
     """400 — request body or arguments rejected by the server."""
+
+
+class UnknownMarkerError(BadRequestError):
+    """400 — one or more marker names aren't recognized by the platform.
+
+    Caught explicitly so callers can prompt for a fixed list without parsing
+    error bodies. `unknown` is the list of names the server flagged. `known_subset`
+    is a sampling of valid names when the server provides it (may be `None`).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        unknown: list[str],
+        known_subset: list[str] | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message, status_code=400, error_code="unknown_markers", body=body)
+        self.unknown = unknown
+        self.known_subset = known_subset
 
 
 class NotFoundError(StrandError):
