@@ -111,3 +111,98 @@ def test_upload_gcs_failure_raises_upload_error(
 
     with pytest.raises(strand.UploadError):
         client.uploads.upload_file(blob)
+
+
+@respx.mock
+def test_list_uploads_parses_rows(client: strand.Client) -> None:
+    upload_id = "11111111-1111-4111-8111-111111111111"
+    respx.get(f"{API_ROOT}/uploads").mock(
+        return_value=Response(
+            200,
+            json={
+                "uploads": [
+                    {
+                        "id": upload_id,
+                        "filename": "a.svs",
+                        "fileSize": "1024",
+                        "status": "ready",
+                        "gcsPath": f"uploads/org/{upload_id}/a.svs",
+                        "createdAt": "2026-05-26T10:00:00Z",
+                        "widthPx": 4096,
+                        "heightPx": 2048,
+                    },
+                ],
+                "nextCursor": None,
+            },
+        )
+    )
+
+    page = client.uploads.list()
+    assert isinstance(page, strand.UploadList)
+    assert page.next_cursor is None
+    assert len(page.uploads) == 1
+    [u] = page.uploads
+    assert u.id == upload_id
+    assert u.filename == "a.svs"
+    assert u.file_size == 1024
+    assert u.width_px == 4096
+    assert u.height_px == 2048
+    assert u.status == "ready"
+    assert u.created_at is not None
+
+
+@respx.mock
+def test_list_uploads_forwards_limit_and_cursor(client: strand.Client) -> None:
+    seen: list[dict[str, str]] = []
+
+    def _record(request):
+        seen.append(dict(request.url.params))
+        return Response(200, json={"uploads": [], "nextCursor": None})
+
+    respx.get(f"{API_ROOT}/uploads").mock(side_effect=_record)
+
+    client.uploads.list(limit=25, cursor="opaque-cursor")
+    assert seen == [{"limit": "25", "cursor": "opaque-cursor"}]
+
+
+def test_list_uploads_rejects_non_positive_limit(client: strand.Client) -> None:
+    with pytest.raises(ValueError):
+        client.uploads.list(limit=0)
+
+
+@respx.mock
+def test_get_upload_returns_dataclass(client: strand.Client) -> None:
+    upload_id = "22222222-2222-4222-8222-222222222222"
+    respx.get(f"{API_ROOT}/uploads/{upload_id}").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": upload_id,
+                "filename": "b.svs",
+                "fileSize": "2048",
+                "status": "preprocessing",
+                "gcsPath": f"uploads/org/{upload_id}/b.svs",
+                "createdAt": "2026-05-26T11:00:00Z",
+                "widthPx": None,
+                "heightPx": None,
+            },
+        )
+    )
+    u = client.uploads.get(upload_id)
+    assert u.id == upload_id
+    assert u.filename == "b.svs"
+    assert u.file_size == 2048
+    assert u.status == "preprocessing"
+    assert u.width_px is None
+
+
+@respx.mock
+def test_get_upload_unknown_raises_not_found(client: strand.Client) -> None:
+    upload_id = "33333333-3333-4333-8333-333333333333"
+    respx.get(f"{API_ROOT}/uploads/{upload_id}").mock(
+        return_value=Response(
+            404, json={"error": "not_found", "message": "Upload not found"}
+        )
+    )
+    with pytest.raises(strand.NotFoundError):
+        client.uploads.get(upload_id)

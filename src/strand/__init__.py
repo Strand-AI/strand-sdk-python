@@ -39,6 +39,7 @@ from ._errors import (
 from ._jobs import Job, JobEvent
 from ._models import Estimate, JobStatus, PredictResult, Upload
 from ._results import JobResults
+from ._uploads import UploadList
 
 __all__ = [
     "AuthError",
@@ -59,6 +60,7 @@ __all__ = [
     "UnknownMarkerError",
     "Upload",
     "UploadError",
+    "UploadList",
 ]
 
 __version__ = "0.2.0"

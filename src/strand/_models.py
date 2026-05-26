@@ -31,14 +31,26 @@ def _parse_dt(raw: str | None) -> datetime | None:
 
 @dataclass(frozen=True, slots=True)
 class Upload:
-    """Resumable upload session."""
+    """Represents either a freshly-initiated upload session or an existing
+    upload row fetched via `client.uploads.list()` / `.get(id)`.
+
+    `upload_url` is only populated for sessions returned by `upload_file`
+    (i.e., from `POST /uploads`). For uploads enumerated later via list/get
+    it's `None`, since the resumable session URL isn't replayable.
+    `filename` / `file_size` / `created_at` are populated when the row is
+    fetched from the server; for newly-initiated sessions they may be `None`
+    until you cross-reference via `get(id)`.
+    """
 
     id: str
-    upload_url: str
-    gcs_path: str
+    upload_url: str | None = None
+    gcs_path: str | None = None
     width_px: int | None = None
     height_px: int | None = None
     status: str | None = None
+    filename: str | None = None
+    file_size: int | None = None
+    created_at: datetime | None = None
 
     @classmethod
     def _from_create(cls, raw: dict[str, Any]) -> Upload:
@@ -46,6 +58,25 @@ class Upload:
             id=str(raw["uploadId"]),
             upload_url=str(raw["uploadUrl"]),
             gcs_path=str(raw["gcsPath"]),
+        )
+
+    @classmethod
+    def _from_row(cls, raw: dict[str, Any]) -> Upload:
+        """Parse a row from GET /uploads or GET /uploads/{id}."""
+        file_size_raw = raw.get("fileSize")
+        try:
+            file_size = int(file_size_raw) if file_size_raw is not None else None
+        except (TypeError, ValueError):
+            file_size = None
+        return cls(
+            id=str(raw["id"]),
+            gcs_path=str(raw["gcsPath"]) if raw.get("gcsPath") is not None else None,
+            filename=str(raw["filename"]) if raw.get("filename") is not None else None,
+            file_size=file_size,
+            status=str(raw["status"]) if raw.get("status") is not None else None,
+            width_px=int(raw["widthPx"]) if isinstance(raw.get("widthPx"), int) else None,
+            height_px=int(raw["heightPx"]) if isinstance(raw.get("heightPx"), int) else None,
+            created_at=_parse_dt(raw.get("createdAt")),
         )
 
     def _with_completion(self, raw: dict[str, Any]) -> Upload:

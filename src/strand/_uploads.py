@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -24,6 +25,14 @@ from ._models import Upload
 
 if TYPE_CHECKING:
     from ._http import HttpSession
+
+
+@dataclass(frozen=True, slots=True)
+class UploadList:
+    """One page of `client.uploads.list()` results."""
+
+    uploads: list[Upload]
+    next_cursor: str | None
 
 CHUNK_SIZE = 8 * 1024 * 1024  # 8 MiB — GCS resumable requires multiples of 256 KiB.
 DEFAULT_CONTENT_TYPE = "application/octet-stream"
@@ -49,6 +58,43 @@ class Uploads:
 
     def __init__(self, http: HttpSession) -> None:
         self._http = http
+
+    def list(
+        self,
+        *,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> UploadList:
+        """List uploads for the calling org, newest-first.
+
+        Args:
+            limit: Page size (1-200). Defaults to 100.
+            cursor: Opaque cursor from a prior response's `next_cursor`.
+
+        Returns:
+            `UploadList(uploads=[...], next_cursor=...)`. `next_cursor` is `None`
+            on the last page.
+        """
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        params: dict[str, Any] = {"limit": limit}
+        if cursor is not None:
+            params["cursor"] = cursor
+        raw = self._http.request_json("GET", "/uploads", params=params)
+        items = raw.get("uploads") or []
+        return UploadList(
+            uploads=[Upload._from_row(row) for row in items],
+            next_cursor=raw.get("nextCursor"),
+        )
+
+    def get(self, upload_id: str) -> Upload:
+        """Fetch a single upload by id.
+
+        Raises:
+            NotFoundError: If no upload with that id exists for the calling org.
+        """
+        raw = self._http.request_json("GET", f"/uploads/{upload_id}")
+        return Upload._from_row(raw)
 
     def upload_file(
         self,
@@ -91,6 +137,9 @@ class Uploads:
         ct = content_type or _CONTENT_TYPE_BY_EXT.get(local.suffix.lower(), DEFAULT_CONTENT_TYPE)
 
         session = self._initiate(local.name, size, ct)
+        # _from_create always sets upload_url; narrow for mypy after widening
+        # the dataclass to support list/get rows where upload_url is None.
+        assert session.upload_url is not None
         self._stream_to_gcs(
             session.upload_url, local, size, ct, chunk_size=chunk_size, progress=progress
         )
