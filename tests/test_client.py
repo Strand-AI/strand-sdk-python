@@ -132,3 +132,13 @@ def test_markers_validation(client: strand.Client) -> None:
         client.predict.estimate("u", markers=[])
     with pytest.raises(ValueError, match="at least one"):
         client.predict.estimate("u", markers=["  ", ""])
+
+
+def test_version_matches_distribution_metadata() -> None:
+    """`strand.__version__` must come from package metadata so it can't drift
+    from pyproject.toml. Regression for #98 where the literal `"0.3.0"` lagged
+    behind the published `0.4.0`."""
+    from importlib.metadata import version as _v
+
+    assert strand.__version__ == _v("strand-sdk")
+    assert strand.__version__ != "unknown"

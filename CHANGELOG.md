@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Release notes on GitHub are extracted from the section header matching the
 published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
+## [0.4.1] - 2026-05-27
+
+### Fixed
+- `client.predict(...)` now uploads with `if_not_exists=True` so repeat calls
+  on the same WSI dedup against the existing sample instead of re-uploading
+  and racing the still-preprocessing prior upload on `submit()`. Previously a
+  second `predict()` on the same file would 400 with "Sample is still
+  preprocessing." (#95)
+- `strand.__version__` is now resolved at import time from package metadata
+  (`importlib.metadata.version("strand-sdk")`) instead of a hardcoded literal,
+  so it can no longer drift from `pyproject.toml` between releases. Falls back
+  to `"unknown"` when the distribution can't be located (e.g. running from a
+  source tree without `pip install -e .`). (#98)
+
 ## [0.4.0] - 2026-05-27
 
 ### BREAKING

@@ -551,3 +551,131 @@ def test_predict_wait_false_forwards_model(
     client.predict(blob, markers=["CD3"], model="v10", wait=False)
     sent = json.loads(submit_route.calls[0].request.content)
     assert sent["model"] == "v10"
+
+
+@respx.mock
+def test_predict_sends_content_sha256_for_dedup(
+    client: strand.Client, tmp_path: Path
+) -> None:
+    """`predict()` must call uploads with `if_not_exists=True` so the platform
+    can dedup repeat calls on the same WSI instead of re-uploading + racing
+    the still-preprocessing prior upload on submit(). Regression for #95."""
+    blob = tmp_path / "slide.svs"
+    blob.write_bytes(b"x" * (256 * 1024))
+
+    init_bodies: list[bytes] = []
+
+    def _init(request):
+        init_bodies.append(request.read())
+        return Response(
+            200,
+            json={
+                "uploadId": UPLOAD_ID,
+                "uploadUrl": GCS_URL,
+                "gcsPath": f"uploads/org/{UPLOAD_ID}/slide.svs",
+                "existing": False,
+            },
+        )
+
+    respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
+    _mock_full_pipeline(["CD3"])
+    # Re-mock /uploads now that _mock_full_pipeline replaced it with a
+    # version that doesn't capture bodies.
+    respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
+
+    client.predict(blob, markers=["CD3"], poll_interval_sec=0.05, timeout_sec=10)
+
+    body = json.loads(init_bodies[0])
+    # The presence of contentSha256 is what proves if_not_exists=True was
+    # passed down — that's the only path that hashes the file.
+    assert "contentSha256" in body, (
+        "predict() must request server-side dedup by sending contentSha256"
+    )
+
+
+@respx.mock
+def test_predict_skips_reupload_on_dedup_hit(
+    client: strand.Client, tmp_path: Path
+) -> None:
+    """End-to-end: server reports `existing: true` → predict() proceeds straight
+    to submit/wait/download without touching GCS or /uploads/{id}/complete."""
+    blob = tmp_path / "slide.svs"
+    blob.write_bytes(b"x" * (256 * 1024))
+
+    # Dedup hit — server returns the existing row's GET shape.
+    respx.post(f"{API_ROOT}/uploads").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": UPLOAD_ID,
+                "uploadId": UPLOAD_ID,
+                "existing": True,
+                "filename": "slide.svs",
+                "fileSize": "262144",
+                "status": "ready",
+                "gcsPath": f"uploads/org/{UPLOAD_ID}/slide.svs",
+                "createdAt": "2026-05-26T10:00:00Z",
+                "widthPx": 1024,
+                "heightPx": 1024,
+            },
+        )
+    )
+    # GCS PUT and /complete must NOT fire — wire routes that fail if hit.
+    gcs_route = respx.put(GCS_URL).mock(
+        return_value=Response(500, text="should not be called")
+    )
+    complete_route = respx.post(f"{API_ROOT}/uploads/{UPLOAD_ID}/complete").mock(
+        return_value=Response(500, text="should not be called")
+    )
+    # Submit/wait/download still run as normal.
+    respx.post(f"{API_ROOT}/predict").mock(
+        return_value=Response(
+            202,
+            json={"jobId": JOB_ID, "reservedCredits": 42, "status": "queued"},
+        )
+    )
+    sse_body = (
+        f'data: {{"id":"{JOB_ID}","status":"completed","progress":1.0,'
+        f'"resultGcsPath":"{RESULT_BASE}"}}\n\n'
+    ).encode()
+    respx.get(f"{API_ROOT}/jobs/{JOB_ID}/stream").mock(
+        return_value=Response(
+            200, content=sse_body, headers={"content-type": "text/event-stream"}
+        )
+    )
+    respx.get(f"{API_ROOT}/jobs/{JOB_ID}").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": JOB_ID,
+                "status": "completed",
+                "progress": 1.0,
+                "reservedCredits": 42,
+                "markers": ["CD3"],
+                "createdAt": None,
+                "startedAt": None,
+                "completedAt": "2026-05-20T10:05:00Z",
+                "errorMessage": None,
+                "resultsAvailable": True,
+            },
+        )
+    )
+    respx.get(f"{API_ROOT}/jobs/{JOB_ID}/results").mock(
+        return_value=Response(
+            200,
+            json={
+                "resultUrl": "https://storage.googleapis.com/.../zarr.json?sig=...",
+                "resultBasePath": RESULT_BASE,
+                "expiresAt": "2026-05-20T11:05:00Z",
+            },
+        )
+    )
+
+    result = client.predict(
+        blob, markers=["CD3"], poll_interval_sec=0.05, timeout_sec=10
+    )
+
+    assert result.job_id == JOB_ID
+    assert result.status == "completed"
+    assert gcs_route.call_count == 0
+    assert complete_route.call_count == 0

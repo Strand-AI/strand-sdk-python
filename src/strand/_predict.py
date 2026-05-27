@@ -190,7 +190,13 @@ class Predict:
         def _upload_progress(done: int, total: int) -> None:
             report("upload", done / total if total else 0.0)
 
-        upload = self._client.uploads.upload_file(local_path, progress=_upload_progress)
+        # Dedup by default: hash the file and let the platform short-circuit
+        # if a non-trashed sample with the same content already exists.
+        # Without this, a repeat `predict(same_file, ...)` re-uploads + races
+        # the still-preprocessing original on submit(). See task #95.
+        upload = self._client.uploads.upload_file(
+            local_path, progress=_upload_progress, if_not_exists=True
+        )
         report("upload", 1.0)
 
         # From here on, any StrandError gets `upload_id` attached so callers
