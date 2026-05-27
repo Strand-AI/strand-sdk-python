@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Release notes on GitHub are extracted from the section header matching the
 published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
+## [0.4.0] - 2026-05-27
+
+### BREAKING
+
+- **`client.samples.set_retention()` removed** — use `client.samples.set_expiration()`.
+- **`client.samples.set_retention_bulk()` removed** — use `client.samples.set_expiration_bulk()`.
+- The `pin=True` keyword is replaced by `never_expire=True`.
+- REST endpoint paths renamed:
+  - `PATCH /samples/{id}/retention` → `PATCH /samples/{id}/expiration`
+  - `PATCH /samples/retention` → `PATCH /samples/expiration`
+- Request body field `pin` → `neverExpire`.
+
+No deprecation shim. The old names emit `AttributeError`.
+
+### Migration
+
+```python
+# Before
+client.samples.set_retention(sample_id, pin=True)
+client.samples.set_retention_bulk([id1, id2], expires_at=date)
+# After
+client.samples.set_expiration(sample_id, never_expire=True)
+client.samples.set_expiration_bulk([id1, id2], expires_at=date)
+```
+
 ## [0.3.0] - 2026-05-27
 
 ### Added
@@ -76,6 +101,7 @@ published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
   `NotFoundError`.
 - Pinned `openapi.json` snapshot of the platform spec for drift-checking.
 
+[0.4.0]: https://github.com/Strand-AI/strand-official/releases/tag/sdk-python%2Fv0.4.0
 [0.3.0]: https://github.com/Strand-AI/strand-official/releases/tag/sdk-python%2Fv0.3.0
 [0.2.0]: https://github.com/Strand-AI/strand-official/releases/tag/sdk-python%2Fv0.2.0
 [0.1.0]: https://github.com/Strand-AI/strand-official/releases/tag/sdk-python%2Fv0.1.0

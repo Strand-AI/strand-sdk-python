@@ -1,13 +1,13 @@
-"""Samples namespace — per-sample retention overrides + restore.
+"""Samples namespace — per-sample expiration overrides + restore.
 
 Exposed as `client.samples` (Phase 2). Mirrors the REST endpoints:
 
-    PATCH /api/v1/samples/{id}/retention
-    PATCH /api/v1/samples/retention          (bulk)
+    PATCH /api/v1/samples/{id}/expiration
+    PATCH /api/v1/samples/expiration         (bulk)
     POST  /api/v1/samples/{id}/restore
 
-The retention modes are mutually exclusive — the SDK validates this client-
-side so misuse raises a clear `BadRequestError` before the round-trip.
+The expiration modes are mutually exclusive — the SDK validates this client-
+side so misuse raises a clear `ValueError` before the round-trip.
 """
 
 from __future__ import annotations
@@ -37,18 +37,19 @@ def _format_expires_at(value: datetime | str | None) -> str | None:
 def _build_payload(
     *,
     expires_at: datetime | str | None,
-    pin: bool,
+    never_expire: bool,
     use_org_default: bool,
     reason: str | None,
 ) -> dict[str, Any]:
     # Mutually exclusive: exactly one of the three modes.
-    if sum([expires_at is not None, pin, use_org_default]) != 1:
+    if sum([expires_at is not None, never_expire, use_org_default]) != 1:
         raise ValueError(
-            "Provide exactly one of: expires_at=<datetime|ISO str>, pin=True, or use_org_default=True"
+            "Provide exactly one of: expires_at=<datetime|ISO str>, "
+            "never_expire=True, or use_org_default=True"
         )
     body: dict[str, Any] = {}
-    if pin:
-        body["pin"] = True
+    if never_expire:
+        body["neverExpire"] = True
     elif use_org_default:
         body["useOrgDefault"] = True
     else:
@@ -64,27 +65,27 @@ class Samples:
     def __init__(self, http: HttpSession) -> None:
         self._http = http
 
-    def set_retention(
+    def set_expiration(
         self,
         sample_id: str,
         expires_at: datetime | str | None = None,
         *,
-        pin: bool = False,
+        never_expire: bool = False,
         use_org_default: bool = False,
         reason: str | None = None,
     ) -> dict[str, Any]:
-        """Set retention on a single sample.
+        """Set expiration on a single sample.
 
-        Exactly one of `expires_at`, `pin=True`, or `use_org_default=True`.
-        `pin=True` is equivalent to passing `expires_at=None` with the
-        override semantics — the sample is anchored against future org
-        policy changes. A naive datetime is treated as UTC.
+        Exactly one of `expires_at`, `never_expire=True`, or
+        `use_org_default=True`. Custom expirations (date or never) survive
+        future org-policy changes; `use_org_default=True` clears the custom
+        expiration. A naive datetime is treated as UTC.
 
         Args:
             sample_id: UUID of the sample.
-            expires_at: Custom expiry as a `datetime` or ISO 8601 string.
-            pin: Pin indefinitely (overrides org policy).
-            use_org_default: Revert to org default retention.
+            expires_at: Custom expiration as a `datetime` or ISO 8601 string.
+            never_expire: Set the sample to never expire (custom).
+            use_org_default: Clear custom expiration; follow org policy.
             reason: Optional governance reason (10-500 chars).
 
         Returns:
@@ -93,22 +94,22 @@ class Samples:
         """
         body = _build_payload(
             expires_at=expires_at,
-            pin=pin,
+            never_expire=never_expire,
             use_org_default=use_org_default,
             reason=reason,
         )
-        return self._http.request_json("PATCH", f"/samples/{sample_id}/retention", json=body)
+        return self._http.request_json("PATCH", f"/samples/{sample_id}/expiration", json=body)
 
-    def set_retention_bulk(
+    def set_expiration_bulk(
         self,
         sample_ids: Iterable[str],
         expires_at: datetime | str | None = None,
         *,
-        pin: bool = False,
+        never_expire: bool = False,
         use_org_default: bool = False,
         reason: str | None = None,
     ) -> dict[str, Any]:
-        """Set retention on a batch of samples (max 500).
+        """Set expiration on a batch of samples (max 500).
 
         All-or-nothing: if any sample fails the permission gate (caller isn't
         the sample creator, an org owner/admin, or a Strand admin), no rows
@@ -120,19 +121,19 @@ class Samples:
         ids = list(sample_ids)
         body = _build_payload(
             expires_at=expires_at,
-            pin=pin,
+            never_expire=never_expire,
             use_org_default=use_org_default,
             reason=reason,
         )
         body["sampleIds"] = ids
-        return self._http.request_json("PATCH", "/samples/retention", json=body)
+        return self._http.request_json("PATCH", "/samples/expiration", json=body)
 
     def restore(self, sample_id: str) -> dict[str, Any]:
-        """Restore an archived sample.
+        """Restore a sample from Trash.
 
-        Sets `archived_at` back to null and bumps `expires_at` to at least 30
-        days from now so the nightly reaper doesn't immediately re-archive
-        the sample. Caller must have the same permissions required for
-        `set_retention`.
+        Available within the 7-day Trash window. Brings the sample back to
+        the active list and extends its expiration so it isn't immediately
+        re-trashed. Caller must have the same permissions required for
+        `set_expiration`.
         """
         return self._http.request_json("POST", f"/samples/{sample_id}/restore")
