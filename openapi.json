@@ -48,7 +48,6 @@
         "type": "object",
         "required": [
           "uploadId",
-          "uploadUrl",
           "gcsPath"
         ],
         "properties": {
@@ -58,10 +57,14 @@
           },
           "uploadUrl": {
             "type": "string",
-            "description": "Resumable upload URL — PUT slide bytes here"
+            "description": "Resumable upload URL — PUT slide bytes here. Omitted when `existing: true`."
           },
           "gcsPath": {
             "type": "string"
+          },
+          "existing": {
+            "type": "boolean",
+            "description": "True when `contentSha256` matched an existing non-archived sample in the same org. In that case `uploadUrl` is omitted and the byte upload should be skipped."
           }
         }
       },
@@ -246,6 +249,11 @@
                   },
                   "contentType": {
                     "type": "string"
+                  },
+                  "contentSha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Optional client-computed sha256 of the file bytes (64 lowercase hex chars). When supplied, the platform checks for an existing non-archived sample in the same org with the same hash; on a hit the response carries `existing: true` and the existing `uploadId` instead of minting a new signed URL."
                   }
                 }
               }
@@ -254,7 +262,7 @@
         },
         "responses": {
           "200": {
-            "description": "Resumable upload URL",
+            "description": "Resumable upload URL — or, when `contentSha256` matched an existing sample, that sample's metadata with `existing: true`.",
             "content": {
               "application/json": {
                 "schema": {

@@ -12,6 +12,7 @@ per GCS spec, except the last chunk; we use 8 MiB.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -51,6 +52,26 @@ _CONTENT_TYPE_BY_EXT = {
 
 
 ProgressCb = Callable[[int, int], None]
+
+# Read size for streaming sha256. Bigger than CHUNK_SIZE is fine — we're not
+# bound by GCS multiples here; 1 MiB is a good cache-friendly value.
+_HASH_READ_SIZE = 1024 * 1024
+
+
+def _sha256_of_file(path: Path) -> str:
+    """Streaming sha256 hex digest of a file. Never buffers the whole file."""
+    # We always drive the loop ourselves. hashlib.file_digest landed in 3.11
+    # and would be marginally faster, but we still support 3.10 and an
+    # explicit loop dodges the cross-version typing skew (file_digest's
+    # return is `Any` on stubs, which trips mypy strict).
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        while True:
+            chunk = fh.read(_HASH_READ_SIZE)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
 
 
 class Uploads:
@@ -103,6 +124,7 @@ class Uploads:
         content_type: str | None = None,
         chunk_size: int = CHUNK_SIZE,
         progress: ProgressCb | None = None,
+        if_not_exists: bool = False,
     ) -> Upload:
         """Upload a local WSI file end-to-end.
 
@@ -117,9 +139,16 @@ class Uploads:
             chunk_size: Bytes per PUT request. Must be a positive multiple of 256 KiB
                 except for the last chunk. Defaults to 8 MiB.
             progress: Optional `(bytes_uploaded, total_bytes)` callback.
+            if_not_exists: When True, sha256 the file (streaming, ~1-2s per 600 MiB)
+                and ask the server to dedup against existing non-archived samples
+                with the same content hash. On a hit, the byte upload is skipped
+                and the existing `Upload` is returned. Defaults to False.
 
         Returns:
             `Upload` with `width_px` / `height_px` / `status="ready"` populated.
+            When `if_not_exists=True` and the server reports a dedup hit, the
+            existing row is returned as-is (status may be `preprocessing` or
+            `ready` depending on where the prior upload is in its lifecycle).
 
         Raises:
             FileNotFoundError: If `path` does not exist.
@@ -136,9 +165,17 @@ class Uploads:
         size = local.stat().st_size
         ct = content_type or _CONTENT_TYPE_BY_EXT.get(local.suffix.lower(), DEFAULT_CONTENT_TYPE)
 
-        session = self._initiate(local.name, size, ct)
-        # _from_create always sets upload_url; narrow for mypy after widening
-        # the dataclass to support list/get rows where upload_url is None.
+        content_sha256 = _sha256_of_file(local) if if_not_exists else None
+
+        session, existing = self._initiate(local.name, size, ct, content_sha256)
+        if existing:
+            # Server confirmed a non-archived row already holds this content
+            # hash — skip the byte upload entirely and surface the existing
+            # row to the caller.
+            return session
+        # _from_create always sets upload_url for the fresh-upload branch;
+        # narrow for mypy after widening the dataclass to support list/get
+        # rows where upload_url is None.
         assert session.upload_url is not None
         self._stream_to_gcs(
             session.upload_url, local, size, ct, chunk_size=chunk_size, progress=progress
@@ -147,13 +184,28 @@ class Uploads:
 
     # ---------- internal helpers ----------
 
-    def _initiate(self, filename: str, size: int, content_type: str) -> Upload:
-        raw = self._http.request_json(
-            "POST",
-            "/uploads",
-            json={"filename": filename, "fileSize": size, "contentType": content_type},
-        )
-        return Upload._from_create(raw)
+    def _initiate(
+        self,
+        filename: str,
+        size: int,
+        content_type: str,
+        content_sha256: str | None,
+    ) -> tuple[Upload, bool]:
+        body: dict[str, Any] = {
+            "filename": filename,
+            "fileSize": size,
+            "contentType": content_type,
+        }
+        if content_sha256 is not None:
+            body["contentSha256"] = content_sha256
+        raw = self._http.request_json("POST", "/uploads", json=body)
+        existing = bool(raw.get("existing"))
+        if existing:
+            # Dedup hit — server returns the GET-by-id shape so we can hydrate
+            # via _from_row. `uploadId` is duplicated alongside `id` for parity
+            # with the create-response convention.
+            return Upload._from_row(raw), True
+        return Upload._from_create(raw), False
 
     def _complete(self, session: Upload) -> Upload:
         raw = self._http.request_json("POST", f"/uploads/{session.id}/complete")

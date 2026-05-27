@@ -111,6 +111,25 @@ except StrandError as e:
         ...
 ```
 
+### Skipping re-uploads with content-hash dedup
+
+Agentic / batch workflows often re-run on the same WSI. Set
+`if_not_exists=True` on `upload_file` to skip the actual byte upload when the
+platform already has the file:
+
+```python
+upload = client.uploads.upload_file("slide.svs", if_not_exists=True)
+```
+
+The SDK streams a sha256 of the local file and posts it on the upload-init
+request. If a non-archived sample in your org already has that hash, the
+existing `Upload` is returned and no bytes leave your machine. On a miss the
+upload proceeds normally and the hash is stored for next time.
+
+Tradeoff: sha256 of a 600 MB WSI takes ~1-2s on modern hardware — worth it
+to skip a multi-minute upload. Leave the default (`False`) when you want the
+upload to run unconditionally.
+
 ### Catching unknown markers
 
 `predict.submit` and `predict.estimate` validate marker names against the

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -194,6 +195,163 @@ def test_get_upload_returns_dataclass(client: strand.Client) -> None:
     assert u.file_size == 2048
     assert u.status == "preprocessing"
     assert u.width_px is None
+
+
+@respx.mock
+def test_upload_if_not_exists_skips_upload_on_dedup_hit(
+    client: strand.Client, tmp_path: Path
+) -> None:
+    """When the server says `existing: true`, we never touch GCS — we just
+    return the existing row hydrated from the response."""
+    blob = tmp_path / "slide.svs"
+    payload = b"x" * (1024 * 1024)
+    blob.write_bytes(payload)
+    expected_hash = hashlib.sha256(payload).hexdigest()
+    existing_id = "44444444-4444-4444-8444-444444444444"
+
+    init_calls: list[dict[str, object]] = []
+
+    def _init(request):
+        init_calls.append({"body": request.read()})
+        # Mirror the server's dedup-hit shape: serializeUpload-shaped row
+        # plus uploadId + existing:true.
+        return Response(
+            200,
+            json={
+                "id": existing_id,
+                "uploadId": existing_id,
+                "existing": True,
+                "filename": "slide.svs",
+                "fileSize": str(len(payload)),
+                "status": "ready",
+                "gcsPath": f"uploads/org/{existing_id}/slide.svs",
+                "createdAt": "2026-05-26T10:00:00Z",
+                "widthPx": 4096,
+                "heightPx": 2048,
+            },
+        )
+
+    respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
+    # GCS PUT must NOT fire — wire a route that explodes if hit.
+    gcs_route = respx.put(
+        "https://storage.googleapis.com/test/resumable"
+    ).mock(return_value=Response(500, text="should not be called"))
+
+    upload = client.uploads.upload_file(blob, if_not_exists=True)
+
+    assert upload.id == existing_id
+    assert upload.status == "ready"
+    assert upload.width_px == 4096
+    assert upload.height_px == 2048
+    # No GCS upload.
+    assert gcs_route.call_count == 0
+    # Init was called with the sha256 in the body.
+    assert len(init_calls) == 1
+    import json
+
+    body = json.loads(init_calls[0]["body"])
+    assert body["contentSha256"] == expected_hash
+    assert body["filename"] == "slide.svs"
+    assert body["fileSize"] == len(payload)
+
+
+@respx.mock
+def test_upload_if_not_exists_uploads_on_miss(
+    client: strand.Client, tmp_path: Path
+) -> None:
+    """When the server says `existing: false`, the normal byte upload + complete
+    path runs."""
+    blob = tmp_path / "slide.svs"
+    payload = b"y" * (256 * 1024)  # exactly one chunk
+    blob.write_bytes(payload)
+    expected_hash = hashlib.sha256(payload).hexdigest()
+    upload_id = "55555555-5555-4555-8555-555555555555"
+    gcs_upload_url = "https://storage.googleapis.com/test/resumable?upload_id=miss"
+
+    init_bodies: list[bytes] = []
+
+    def _init(request):
+        init_bodies.append(request.read())
+        return Response(
+            200,
+            json={
+                "uploadId": upload_id,
+                "uploadUrl": gcs_upload_url,
+                "gcsPath": f"uploads/org/{upload_id}/slide.svs",
+                "existing": False,
+            },
+        )
+
+    respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
+    respx.put(gcs_upload_url).mock(return_value=Response(200))
+    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
+        return_value=Response(
+            200,
+            json={
+                "uploadId": upload_id,
+                "status": "preprocessing",
+                "widthPx": 1024,
+                "heightPx": 512,
+                "dimensionsSource": "sharp",
+            },
+        )
+    )
+
+    upload = client.uploads.upload_file(blob, if_not_exists=True)
+
+    assert upload.id == upload_id
+    assert upload.status == "preprocessing"
+    assert upload.width_px == 1024
+    import json
+
+    body = json.loads(init_bodies[0])
+    assert body["contentSha256"] == expected_hash
+
+
+@respx.mock
+def test_upload_without_if_not_exists_omits_hash(
+    client: strand.Client, tmp_path: Path
+) -> None:
+    """Default behavior: no sha256 computed, no `contentSha256` sent."""
+    blob = tmp_path / "slide.svs"
+    blob.write_bytes(b"z" * (256 * 1024))
+    upload_id = "66666666-6666-4666-8666-666666666666"
+    gcs_upload_url = "https://storage.googleapis.com/test/resumable?upload_id=none"
+
+    init_bodies: list[bytes] = []
+
+    def _init(request):
+        init_bodies.append(request.read())
+        return Response(
+            200,
+            json={
+                "uploadId": upload_id,
+                "uploadUrl": gcs_upload_url,
+                "gcsPath": "p",
+            },
+        )
+
+    respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
+    respx.put(gcs_upload_url).mock(return_value=Response(200))
+    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
+        return_value=Response(
+            200,
+            json={
+                "uploadId": upload_id,
+                "status": "preprocessing",
+                "widthPx": 1,
+                "heightPx": 1,
+                "dimensionsSource": "stub",
+            },
+        )
+    )
+
+    client.uploads.upload_file(blob)
+
+    import json
+
+    body = json.loads(init_bodies[0])
+    assert "contentSha256" not in body
 
 
 @respx.mock
