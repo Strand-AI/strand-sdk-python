@@ -13,7 +13,7 @@ side so misuse raises a clear `BadRequestError` before the round-trip.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -30,7 +30,7 @@ def _format_expires_at(value: datetime | str | None) -> str | None:
         # Naive datetime — treat as UTC. We surface this convention in the
         # docstrings; coercing here avoids the surprising "off by hours"
         # result you'd otherwise get from .isoformat() with a naive value.
-        value = value.replace(tzinfo=timezone.utc)
+        value = value.replace(tzinfo=UTC)
     return value.isoformat()
 
 

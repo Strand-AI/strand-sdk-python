@@ -4,6 +4,8 @@ Python client for the [Strand Platform](https://strandai.com) — H&E → multip
 
 **Agent-friendly docs:** The full API reference is published as Markdown at [https://app.strandai.com/docs/api.md](https://app.strandai.com/docs/api.md), and the LLM index lives at [https://app.strandai.com/llms.txt](https://app.strandai.com/llms.txt).
 
+Requires Python 3.12+.
+
 ```bash
 pip install strand-sdk
 # or with bioinformatics extras (AnnData / zarr):
@@ -177,6 +179,23 @@ client.jobs.cancel(job.id)
 
 Calling `cancel` on a job that is already `completed`, `failed`, or
 `cancelled` raises `BadRequestError`.
+
+### Reusing prior uploads
+
+`client.uploads` exposes list + get so you can re-submit against an existing
+WSI without re-uploading:
+
+```python
+page = client.uploads.list(limit=20)
+for u in page.uploads:
+    print(u.id, u.filename, u.status, u.created_at)
+
+upload = client.uploads.get("upload_abc123")
+job = client.predict.submit(upload.id, markers=["CD3", "CD8"])
+```
+
+Pages are newest-first and stable under inserts. Pass the response's
+`next_cursor` back as `cursor=` to get the next page.
 
 ## Configuration
 
