@@ -411,3 +411,143 @@ def test_predict_validates_markers(client: strand.Client, tmp_path: Path) -> Non
 def test_predict_missing_file_raises(client: strand.Client, tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         client.predict(tmp_path / "missing.svs", markers=["CD3"])
+
+
+@respx.mock
+def test_predict_submit_passes_model_when_provided(client: strand.Client) -> None:
+    """`model=` is forwarded as `model` on the wire body."""
+    route = respx.post(f"{API_ROOT}/predict").mock(
+        return_value=Response(
+            202,
+            json={"jobId": JOB_ID, "reservedCredits": 7, "status": "queued"},
+        )
+    )
+
+    client.predict.submit(UPLOAD_ID, markers=["CD3"], model="v10-fullpanel")
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["uploadId"] == UPLOAD_ID
+    assert sent["markers"] == ["CD3"]
+    assert sent["model"] == "v10-fullpanel"
+
+
+@respx.mock
+def test_predict_submit_omits_model_field_when_unspecified(client: strand.Client) -> None:
+    """No `model` key is sent when caller doesn't pass one — backend default applies."""
+    route = respx.post(f"{API_ROOT}/predict").mock(
+        return_value=Response(
+            202,
+            json={"jobId": JOB_ID, "reservedCredits": 7, "status": "queued"},
+        )
+    )
+
+    client.predict.submit(UPLOAD_ID, markers=["CD3"])
+    sent = json.loads(route.calls[0].request.content)
+    assert "model" not in sent
+
+
+@respx.mock
+def test_predict_wait_false_returns_job_after_submit(
+    client: strand.Client, tmp_path: Path
+) -> None:
+    """`wait=False` returns a Job once upload + submit complete, skipping wait/download."""
+    blob = tmp_path / "slide.svs"
+    blob.write_bytes(b"x" * (256 * 1024))
+
+    respx.post(f"{API_ROOT}/uploads").mock(
+        return_value=Response(
+            200,
+            json={
+                "uploadId": UPLOAD_ID,
+                "uploadUrl": GCS_URL,
+                "gcsPath": f"uploads/org/{UPLOAD_ID}/slide.svs",
+            },
+        )
+    )
+    respx.put(GCS_URL).mock(return_value=Response(200))
+    respx.post(f"{API_ROOT}/uploads/{UPLOAD_ID}/complete").mock(
+        return_value=Response(
+            200,
+            json={
+                "uploadId": UPLOAD_ID,
+                "status": "ready",
+                "widthPx": 8,
+                "heightPx": 8,
+                "dimensionsSource": "sharp",
+            },
+        )
+    )
+    submit_route = respx.post(f"{API_ROOT}/predict").mock(
+        return_value=Response(
+            202,
+            json={"jobId": JOB_ID, "reservedCredits": 42, "status": "queued"},
+        )
+    )
+    # Deliberately mock /jobs/{id}/stream so that a stray .wait() in the test
+    # path would surface as a test failure — proves wait/download didn't fire.
+    wait_route = respx.get(f"{API_ROOT}/jobs/{JOB_ID}/stream")
+    results_route = respx.get(f"{API_ROOT}/jobs/{JOB_ID}/results")
+
+    stages: list[tuple[str, float]] = []
+    job = client.predict(
+        blob,
+        markers=["CD3"],
+        wait=False,
+        on_progress=lambda s, f: stages.append((s, f)),
+    )
+
+    assert isinstance(job, strand.Job)
+    assert job.id == JOB_ID
+    assert job.reserved_credits == 42
+    assert submit_route.called
+    # No wait / download in fire-and-forget mode.
+    assert not wait_route.called
+    assert not results_route.called
+    # Progress stages must include upload + submit, but NOT wait/download.
+    seen = {s for s, _ in stages}
+    assert "upload" in seen
+    assert "submit" in seen
+    assert "wait" not in seen
+    assert "download" not in seen
+
+
+@respx.mock
+def test_predict_wait_false_forwards_model(
+    client: strand.Client, tmp_path: Path
+) -> None:
+    """`model=` is plumbed through the wait=False path too."""
+    blob = tmp_path / "slide.svs"
+    blob.write_bytes(b"x" * (256 * 1024))
+
+    respx.post(f"{API_ROOT}/uploads").mock(
+        return_value=Response(
+            200,
+            json={
+                "uploadId": UPLOAD_ID,
+                "uploadUrl": GCS_URL,
+                "gcsPath": f"uploads/org/{UPLOAD_ID}/slide.svs",
+            },
+        )
+    )
+    respx.put(GCS_URL).mock(return_value=Response(200))
+    respx.post(f"{API_ROOT}/uploads/{UPLOAD_ID}/complete").mock(
+        return_value=Response(
+            200,
+            json={
+                "uploadId": UPLOAD_ID,
+                "status": "ready",
+                "widthPx": 8,
+                "heightPx": 8,
+                "dimensionsSource": "sharp",
+            },
+        )
+    )
+    submit_route = respx.post(f"{API_ROOT}/predict").mock(
+        return_value=Response(
+            202,
+            json={"jobId": JOB_ID, "reservedCredits": 0, "status": "queued"},
+        )
+    )
+
+    client.predict(blob, markers=["CD3"], model="v10", wait=False)
+    sent = json.loads(submit_route.calls[0].request.content)
+    assert sent["model"] == "v10"

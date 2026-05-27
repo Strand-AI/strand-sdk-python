@@ -44,6 +44,50 @@ Pass `on_progress=lambda stage, frac: ...` to follow the four stages
 in `[0.0, 1.0]` — `0.0` at stage start, `1.0` at stage end, with
 intermediate values where available (e.g. upload byte progress).
 
+### Fire-and-forget: `wait=False`
+
+A full pipeline run blocks for 15+ minutes. To kick a job off and do other
+work in the meantime, pass `wait=False` — `predict(...)` returns a `Job`
+handle as soon as the upload + submit complete:
+
+```python
+job = client.predict("slide.svs", markers=["CD3", "CD8"], wait=False)
+print(f"submitted {job.id}")
+
+# ...do other work, or shut down the process — the job runs server-side.
+
+# Later (same process or a fresh one via `client.jobs.get(job_id)`):
+job.wait()
+result = job.download_results()      # AnnData
+# or stream events:
+for event in job.stream_events():
+    print(event.status, event.progress)
+```
+
+Static typing follows the `wait` flag — `wait=True` returns `PredictResult`,
+`wait=False` returns `Job`, so IDE completions stay correct without a
+runtime check.
+
+### Choosing a model
+
+`predict.submit` and `predict(...)` accept an optional `model=`. Today the
+SDK routes to two siblings of the POSTMAN v10 family:
+
+- `"v10"` — original 7-marker panel (smaller, faster).
+- `"v10-fullpanel"` — 192-marker panel (broader coverage).
+
+Both share the same GenePT embeddings, so the marker vocabulary is identical
+— picking a model is a model-weights swap, not a vocab swap. Omitting `model`
+lets the platform pick the default (currently `v10-fullpanel`).
+
+```python
+result = client.predict(
+    "slide.svs",
+    markers=["CD8", "Ki67", "PanCK"],
+    model="v10-fullpanel",
+)
+```
+
 ### Recovering from a failed pipeline without re-uploading
 
 If `client.predict(...)` raises after the upload step succeeded, the
