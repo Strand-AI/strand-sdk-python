@@ -18,7 +18,7 @@ from ._results import JobResults
 if TYPE_CHECKING:
     from ._client import Client
 
-TERMINAL_STATUSES = frozenset({"completed", "failed"})
+TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
 @dataclass
@@ -75,6 +75,24 @@ class Job:
         status = JobStatus._from_dict(raw)
         self._cached_status = status
         return status
+
+    def cancel(self) -> JobStatus:
+        """Request cancellation of an in-flight job.
+
+        Atomically flips the server-side status to ``cancelled`` and refunds
+        the credit reservation. Markers already written before cancel are
+        preserved on the sample; the GPU side is not interrupted.
+
+        Returns:
+            The post-cancel :class:`JobStatus` snapshot (status will be
+            ``"cancelled"``).
+
+        Raises:
+            BadRequestError: the job is already in a terminal status.
+            NotFoundError:   the job doesn't exist or belongs to another org.
+        """
+        self._http.request_json("POST", f"/jobs/{self.id}/cancel")
+        return self.refresh()
 
     @property
     def status(self) -> JobStatus:

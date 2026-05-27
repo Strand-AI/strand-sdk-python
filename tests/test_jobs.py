@@ -119,6 +119,52 @@ def test_wait_via_sse_resolves_on_terminal_event(client: strand.Client) -> None:
 
 
 @respx.mock
+def test_cancel_flips_status_and_returns_handle(client: strand.Client) -> None:
+    job_id = "22222222-2222-2222-2222-222222222222"
+    respx.post(f"{API_ROOT}/jobs/{job_id}/cancel").mock(
+        return_value=Response(200, json={"id": job_id, "status": "cancelled"})
+    )
+    respx.get(f"{API_ROOT}/jobs/{job_id}").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": job_id,
+                "status": "cancelled",
+                "progress": 0.5,
+                "reservedCredits": 100,
+                "markers": ["CD3"],
+                "createdAt": "2026-05-14T10:00:00Z",
+                "startedAt": "2026-05-14T10:00:30Z",
+                "completedAt": "2026-05-14T10:02:00Z",
+                "errorMessage": None,
+                "resultsAvailable": False,
+            },
+        )
+    )
+    job = client.jobs.cancel(job_id)
+    assert job.status.status == "cancelled"
+    assert job.status.is_terminal is True
+
+
+@respx.mock
+def test_cancel_terminal_raises_bad_request(client: strand.Client) -> None:
+    job_id = "22222222-2222-2222-2222-222222222222"
+    respx.post(f"{API_ROOT}/jobs/{job_id}/cancel").mock(
+        return_value=Response(
+            400,
+            json={
+                "error": "job_already_terminal",
+                "message": "Job is already completed",
+                "status": "completed",
+            },
+        )
+    )
+    with pytest.raises(strand.BadRequestError) as exc_info:
+        client.jobs.cancel(job_id)
+    assert exc_info.value.error_code == "job_already_terminal"
+
+
+@respx.mock
 def test_wait_raises_on_failed_status(client: strand.Client) -> None:
     job_id = "22222222-2222-2222-2222-222222222222"
     respx.post(f"{API_ROOT}/predict").mock(

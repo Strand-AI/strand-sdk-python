@@ -29,6 +29,18 @@ class _JobsNamespace:
         job.refresh()
         return job
 
+    def cancel(self, job_id: str) -> Job:
+        """Cancel an in-flight job by id and return its refreshed handle.
+
+        Convenience for ``client.jobs.get(job_id).cancel()``. Raises
+        :class:`BadRequestError` if the job is already terminal.
+        """
+        from ._jobs import Job
+
+        job = Job(id=job_id, reserved_credits=None, client=self._client)
+        job.cancel()
+        return job
+
 
 class Client:
     """Strand Platform API client.

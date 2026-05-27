@@ -148,7 +148,7 @@ class JobStatus:
 
     @property
     def is_terminal(self) -> bool:
-        return self.status in {"completed", "failed"}
+        return self.status in {"completed", "failed", "cancelled"}
 
 
 @dataclass(frozen=True, slots=True)

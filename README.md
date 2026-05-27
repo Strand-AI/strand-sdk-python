@@ -142,6 +142,23 @@ job.wait()                                    # blocks until terminal status
 adata = job.download_results()                # AnnData
 ```
 
+### Cancelling an in-flight job
+
+Call `Job.cancel()` (or the top-level `client.jobs.cancel(job_id)` shortcut)
+to request termination of a running job. Cancel is atomic: the job's status
+flips to `cancelled`, the credit reservation is refunded, and any markers
+that have already been written stay on the sample. The GPU worker is not
+interrupted, but its remaining outputs are ignored.
+
+```python
+job = client.predict.submit(upload.id, markers=["CD3", "CD8"])
+# ...later, from another thread or process:
+client.jobs.cancel(job.id)
+```
+
+Calling `cancel` on a job that is already `completed`, `failed`, or
+`cancelled` raises `BadRequestError`.
+
 ## Configuration
 
 | Source | Variable / argument | Default |
