@@ -21,7 +21,7 @@ ProgressCb = Callable[[str, float], None]
 # SDK-routable models. Anything else (or omitting the param) lets the platform
 # pick — currently equivalent to `v10-fullpanel` per the `MODAL_ENDPOINT_URL`
 # env, but treat that fallback as an implementation detail of the backend.
-ModelId = Literal["v10", "v10-fullpanel"]
+ModelId = Literal["v10", "v10-fullpanel", "v10-fullpanel-v2"]
 
 
 def _coerce_markers(markers: Iterable[str]) -> list[str]:
@@ -62,11 +62,12 @@ class Predict:
         Args:
             upload_id: Sample/upload identifier to run inference against.
             markers: Markers to predict.
-            model: Optional explicit model id. Currently `"v10"` (the original
-                7-marker panel) or `"v10-fullpanel"` (the 192-marker sibling).
-                When omitted, the platform picks. The two models share GenePT
-                weights — a marker request against the wrong endpoint is just
-                a model-weights swap, not a different vocab.
+            model: Optional explicit model id. One of `"v10"` (the original
+                7-marker panel), `"v10-fullpanel"` (the 192-marker sibling), or
+                `"v10-fullpanel-v2"` (the retrained 192-marker sibling, Pictor
+                eval pending). When omitted, the platform picks. The models
+                share GenePT weights — a marker request against the wrong
+                endpoint is just a model-weights swap, not a different vocab.
 
         Raises:
             InsufficientCreditsError: 402 — not enough credits to reserve.
