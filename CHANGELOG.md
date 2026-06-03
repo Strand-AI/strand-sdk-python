@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Release notes on GitHub are extracted from the section header matching the
 published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
+## [0.5.1] - 2026-06-03
+
+### Changed
+- Dropped the legacy `"v10"` / `"v10-fullpanel"` / `"v10-fullpanel-v2"`
+  alias-rewriting path. The SDK no longer emits a `DeprecationWarning`
+  and no longer normalizes legacy strings client-side — they're forwarded
+  verbatim to the server, which now returns 400 `unknown_model`. Pass
+  `model="v0.4"` or `model="v0.5"` directly. The original 0.5.0 release
+  notes (below) called out a 2026-12-01 sunset window for the alias
+  path; we collapsed that to a hard cutover on 2026-06-03 after the
+  in-the-wild traffic sample showed no callers still emitting the
+  legacy strings. See `infra/notes/postman-versioning-2026-06.md` §4
+  (rewritten 2026-06-03) in the platform repo.
+- `JobStatus.model` and `PredictResult.model` are now typed as
+  `Literal["v0.1", "v0.4", "v0.5"] | None`. The renumber of the sunset
+  35-marker base from `"v0.3"` → `"v0.1"` (design note §8.2, locked
+  2026-06-03) ships via a follow-up DB migration; historical jobs that
+  ran on `wx0hp7fb` now surface as `"v0.1"` on the wire instead of
+  `"v0.3"`.
+
+### Migration
+
+No action required if you already migrated to canonical v0.X ids per
+0.5.0 below. If you're still passing `"v10*"` strings, expect a 400
+`unknown_model` response and update the call to the canonical id.
+
 ## [0.5.0] - 2026-06-03
 
 ### Changed

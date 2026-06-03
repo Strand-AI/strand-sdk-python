@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import warnings
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, overload
@@ -24,77 +23,15 @@ ProgressCb = Callable[[str, float], None]
 # §2 + §4). Omit `model` to let the platform pick the current default
 # (today: `"v0.5"`).
 #
-# v0.3 is intentionally absent — it was sunset in the versioning rollout
-# (design note §8.3). The legacy `"v10"` alias resolved to v0.3, so
-# passing `model="v10"` now raises a `DeprecationWarning` *and* the
-# platform 400s with `unknown_model`. The other two legacy aliases
-# (`"v10-fullpanel"` → `"v0.4"`, `"v10-fullpanel-v2"` → `"v0.5"`) still
-# resolve and dispatch, with a `DeprecationWarning`.
+# Sunset versions (v0.1, formerly the `"v10"` 35-marker base) are not
+# selectable — the server returns 400 `unknown_model`. Legacy aliases
+# (`"v10"`, `"v10-fullpanel"`, `"v10-fullpanel-v2"`) were dropped on
+# 2026-06-03 (design note §4, rewritten): the platform no longer accepts
+# them on input, and the SDK no longer rewrites them client-side. The
+# `Literal` is intentionally NOT a strict-enum type-guard at runtime —
+# callers can still pass any `str` (forward-compat with new server
+# versions cut without a SDK release); the server is the authority.
 ModelId = Literal["v0.4", "v0.5"]
-
-# Legacy → canonical alias table. Kept in lockstep with the platform's
-# `LEGACY_MODEL_ALIASES` map in `platform/src/lib/inference/postman-versions.ts`
-# (the SDK can't import from the platform's TS source). Update both sides
-# together; any drift surfaces as a 400 `unknown_model` from the server
-# even though the SDK accepted the alias.
-#
-# Six-month sunset window per design note §4: legacy strings remain
-# accepted on the wire until 2026-12-01, with `DeprecationWarning` on
-# each call. After that, both the SDK and the REST layer drop them.
-_LEGACY_MODEL_ALIASES: dict[str, ModelId] = {
-    # "v10" resolves to v0.3 which is sunset; we still emit the warning
-    # so callers see the deprecation message, but the platform will
-    # return 400 unknown_model. Forwarding `"v10"` (rather than rewriting
-    # to `"v0.3"`) lets the server emit a single coherent error code.
-    "v10-fullpanel": "v0.4",
-    "v10-fullpanel-v2": "v0.5",
-}
-
-# Sunset aliases — accepted on the input surface so existing callers
-# don't `ValueError` client-side, but `_normalize_model_id` returns
-# them unchanged so the server can answer with its canonical
-# `unknown_model` response. Kept separate from the resolving table
-# above so future readers don't accidentally route a sunset version.
-_SUNSET_MODEL_ALIASES: frozenset[str] = frozenset({"v10"})
-
-
-def _normalize_model_id(model: str | None) -> str | None:
-    """Normalize a caller-supplied model id to its canonical v0.X label.
-
-    - Canonical ids (`"v0.4"`, `"v0.5"`) pass through unchanged.
-    - Legacy aliases (`"v10-fullpanel"`, `"v10-fullpanel-v2"`) resolve to
-      their v0.X target and a `DeprecationWarning` is emitted.
-    - Sunset aliases (`"v10"`) emit a `DeprecationWarning` and are
-      returned unchanged — the server answers with 400 `unknown_model`.
-    - Anything else (unknown strings) is passed through; the server is
-      the authority on whether the id resolves, so the SDK does not
-      client-side-validate. This keeps the SDK forward-compatible with
-      new versions added on the server without a SDK release.
-
-    Returns `None` when `model` is `None`.
-    """
-    if model is None:
-        return None
-    if model in _LEGACY_MODEL_ALIASES:
-        canonical = _LEGACY_MODEL_ALIASES[model]
-        warnings.warn(
-            f"model={model!r} is a deprecated alias for {canonical!r}; "
-            f"pass model={canonical!r} instead. Legacy aliases will be "
-            f"removed in a future release (target: 2026-12-01).",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        return canonical
-    if model in _SUNSET_MODEL_ALIASES:
-        warnings.warn(
-            f"model={model!r} refers to a sunset POSTMAN version and is no "
-            f"longer dispatched. The server will reject this request with "
-            f"`unknown_model`; use 'v0.4' or 'v0.5' instead.",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        return model
-    return model
 
 
 def _coerce_markers(markers: Iterable[str]) -> list[str]:
@@ -142,11 +79,9 @@ class Predict:
                 swap, not a vocab swap. When omitted, the platform picks the
                 current default (`"v0.5"`).
 
-                Legacy aliases (`"v10-fullpanel"` → `"v0.4"`,
-                `"v10-fullpanel-v2"` → `"v0.5"`) are still accepted on input
-                with a `DeprecationWarning`. The `"v10"` alias (which used to
-                resolve to the now-sunset v0.3) raises a `DeprecationWarning`
-                and the server rejects the request with `unknown_model`.
+                Legacy aliases (`"v10"`, `"v10-fullpanel"`, `"v10-fullpanel-v2"`)
+                were dropped on 2026-06-03 — the server now rejects them with
+                400 `unknown_model`. Pass the canonical v0.X id directly.
 
         Raises:
             InsufficientCreditsError: 402 — not enough credits to reserve.
@@ -160,9 +95,8 @@ class Predict:
             "uploadId": upload_id,
             "markers": _coerce_markers(markers),
         }
-        resolved_model = _normalize_model_id(model)
-        if resolved_model is not None:
-            body["model"] = resolved_model
+        if model is not None:
+            body["model"] = model
         raw = self._http.request_json("POST", "/predict", json=body, expected=(202,))
         return Job(
             id=str(raw["jobId"]),

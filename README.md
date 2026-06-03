@@ -92,28 +92,21 @@ print(result.model)  # → "v0.5" (the v0.X label the platform actually ran)
 ```
 
 `PredictResult.model` and `JobStatus.model` always carry the canonical v0.X
-label — even when the caller submitted a legacy alias on input, the platform
-normalizes before echoing.
+label. Historical jobs from before the versioning rollout may surface as
+`"v0.1"` (the renumbered legacy 35-marker base — sunset; readable but not
+dispatchable).
 
 #### Migration from `v10-*` names
 
-The earlier `"v10"`, `"v10-fullpanel"`, and `"v10-fullpanel-v2"` names are
-still accepted on the wire as legacy aliases:
+The earlier `"v10"`, `"v10-fullpanel"`, and `"v10-fullpanel-v2"` names were
+dropped on 2026-06-03 — the server returns 400 `unknown_model` for all of
+them. Pass the canonical v0.X id instead:
 
-| Legacy alias            | Canonical id  | Status |
-| ----------------------- | ------------- | ------ |
-| `"v10-fullpanel-v2"`    | `"v0.5"`      | accepted with `DeprecationWarning` |
-| `"v10-fullpanel"`       | `"v0.4"`      | accepted with `DeprecationWarning` |
-| `"v10"`                 | (sunset v0.3) | rejected by server as `unknown_model` (the SDK still emits a `DeprecationWarning` so callers see the rename) |
-
-Pinning the canonical id avoids the warning and forward-protects against the
-sunset window (target: 2026-12-01). To silence the warning before then while
-you migrate:
-
-```python
-import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning, module="strand")
-```
+| Legacy id               | Replacement   |
+| ----------------------- | ------------- |
+| `"v10-fullpanel-v2"`    | `"v0.5"`      |
+| `"v10-fullpanel"`       | `"v0.4"`      |
+| `"v10"`                 | (sunset — no replacement; the underlying 35-marker base was retired) |
 
 ### Recovering from a failed pipeline without re-uploading
 

@@ -18,19 +18,25 @@ if TYPE_CHECKING:
 
 
 # Canonical POSTMAN version label echoed back by the platform on every
-# job-shaped response. Strictly v0.X — even when the caller submitted a
-# legacy alias on input, the platform normalizes before persisting so
-# the value returned here is always the canonical name. Historical
-# rows from before the versioning rollout may surface as `"v0.3"`
-# (sunset; readable but not dispatchable) via `JobStatus.model`; the
+# job-shaped response. Strictly v0.X. Historical rows from before the
+# versioning rollout may surface as `"v0.1"` (sunset; readable but not
+# dispatchable) via `JobStatus.model` — that's the badge string for
+# rows that ran on the legacy `wx0hp7fb` 35-marker base. The
 # `PredictResult.model` returned from a *fresh* `client.predict(...)`
 # is always one of the live v0.X labels.
+#
+# Pre-2026-06-03 this list included `"v0.3"` — design note §8.2's
+# original numbering put the sunset 35-marker base there. The
+# 2026-06-03 renumber collapsed the v0.1 / v0.2 gap (those checkpoints
+# never served prod) by relabelling the sunset entry as `v0.1` directly.
+# The historical-row backfill migration `0031_postman_v03_to_v01.sql`
+# is what makes that change visible on the wire.
 #
 # Kept type-aliased rather than imported from `_predict.ModelId` so
 # this module avoids a circular import (`_predict` imports from
 # `_models`). The two literals must stay in sync — adding a version
 # means editing both lists.
-PostmanVersionLabel = Literal["v0.3", "v0.4", "v0.5"]
+PostmanVersionLabel = Literal["v0.1", "v0.4", "v0.5"]
 
 
 def _parse_dt(raw: str | None) -> datetime | None:
