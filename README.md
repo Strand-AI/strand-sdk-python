@@ -72,22 +72,47 @@ runtime check.
 
 ### Choosing a model
 
-`predict.submit` and `predict(...)` accept an optional `model=`. Today the
-SDK routes to two siblings of the POSTMAN v10 family:
+`predict.submit` and `predict(...)` accept an optional `model=`. Live POSTMAN
+versions:
 
-- `"v10"` — original 7-marker panel (smaller, faster).
-- `"v10-fullpanel"` — 192-marker panel (broader coverage).
+- `"v0.4"` — 192-marker panel, original training.
+- `"v0.5"` — 192-marker panel, retrained (current default).
 
 Both share the same GenePT embeddings, so the marker vocabulary is identical
-— picking a model is a model-weights swap, not a vocab swap. Omitting `model`
-lets the platform pick the default (currently `v10-fullpanel`).
+— picking a version is a model-weights swap, not a vocab swap. Omit `model`
+to let the platform pick the current default (`"v0.5"`).
 
 ```python
 result = client.predict(
     "slide.svs",
     markers=["CD8", "Ki67", "PanCK"],
-    model="v10-fullpanel",
+    model="v0.5",
 )
+print(result.model)  # → "v0.5" (the v0.X label the platform actually ran)
+```
+
+`PredictResult.model` and `JobStatus.model` always carry the canonical v0.X
+label — even when the caller submitted a legacy alias on input, the platform
+normalizes before echoing.
+
+#### Migration from `v10-*` names
+
+The earlier `"v10"`, `"v10-fullpanel"`, and `"v10-fullpanel-v2"` names are
+still accepted on the wire as legacy aliases:
+
+| Legacy alias            | Canonical id  | Status |
+| ----------------------- | ------------- | ------ |
+| `"v10-fullpanel-v2"`    | `"v0.5"`      | accepted with `DeprecationWarning` |
+| `"v10-fullpanel"`       | `"v0.4"`      | accepted with `DeprecationWarning` |
+| `"v10"`                 | (sunset v0.3) | rejected by server as `unknown_model` (the SDK still emits a `DeprecationWarning` so callers see the rename) |
+
+Pinning the canonical id avoids the warning and forward-protects against the
+sunset window (target: 2026-12-01). To silence the warning before then while
+you migrate:
+
+```python
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="strand")
 ```
 
 ### Recovering from a failed pipeline without re-uploading

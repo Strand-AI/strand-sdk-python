@@ -57,6 +57,42 @@ def test_refresh_parses_status_snapshot(client: strand.Client) -> None:
     assert status.progress == 0.5
     assert status.markers == ["CD3", "CD8"]
     assert status.is_terminal is False
+    # The status payload above doesn't include `model` — older deploys
+    # didn't return it. `JobStatus.model` must surface as `None` rather
+    # than KeyError'ing through the parser.
+    assert status.model is None
+
+
+@respx.mock
+def test_refresh_surfaces_model_version_when_server_emits_it(
+    client: strand.Client,
+) -> None:
+    """Post-PR-2 the platform always echoes the canonical v0.X label on
+    job-shaped responses. The SDK surfaces it as `JobStatus.model` so
+    downstream code (dashboards, audit logs in the SDK consumer's app)
+    can read the actual version that ran without re-deriving from
+    metadata."""
+    job_id = "44444444-4444-4444-4444-444444444444"
+    respx.get(f"{API_ROOT}/jobs/{job_id}").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": job_id,
+                "status": "completed",
+                "progress": 1.0,
+                "reservedCredits": 100,
+                "markers": ["CD3"],
+                "model": "v0.5",
+                "createdAt": None,
+                "startedAt": None,
+                "completedAt": "2026-05-14T10:05:00Z",
+                "errorMessage": None,
+                "resultsAvailable": True,
+            },
+        )
+    )
+    job = client.jobs.get(job_id)
+    assert job.status.model == "v0.5"
 
 
 def _sse_stream(events: list[dict]) -> bytes:

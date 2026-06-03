@@ -8,6 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Release notes on GitHub are extracted from the section header matching the
 published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
+## [0.5.0] - 2026-06-03
+
+### Changed
+- `ModelId` is now `Literal["v0.4", "v0.5"]` — the canonical POSTMAN
+  version track from the platform's `POSTMAN_VERSIONS` map. The earlier
+  `"v10"`, `"v10-fullpanel"`, and `"v10-fullpanel-v2"` strings are still
+  accepted on input as deprecated aliases (each emits a
+  `DeprecationWarning`); the SDK rewrites `"v10-fullpanel"` → `"v0.4"`
+  and `"v10-fullpanel-v2"` → `"v0.5"` before sending. `"v10"` resolves
+  to the now-sunset v0.3 and the server returns 400 `unknown_model`. The
+  alias path will be removed on 2026-12-01. See
+  `infra/notes/postman-versioning-2026-06.md` §4 in the platform repo.
+- `JobStatus` and `PredictResult` now expose a `model` attribute typed
+  as `Literal["v0.3", "v0.4", "v0.5"] | None`. The platform normalizes
+  before persisting, so this is always the canonical v0.X label that
+  ran — historical jobs may surface `"v0.3"`; newly submitted jobs
+  return one of the live ids. `None` only for older servers that didn't
+  populate the field.
+- `ModelId` is re-exported from the package surface (`from strand import
+  ModelId`).
+
+### Migration
+
+```python
+# Before
+job = client.predict.submit(upload.id, ["CD8"], model="v10-fullpanel-v2")
+# After (no warning, future-proof through 2026-12-01)
+job = client.predict.submit(upload.id, ["CD8"], model="v0.5")
+```
+
+Legacy strings keep working until 2026-12-01; the `DeprecationWarning`
+is the only change visible to a caller that doesn't migrate.
+
 ## [0.4.1] - 2026-05-27
 
 ### Fixed
@@ -115,6 +148,8 @@ client.samples.set_expiration_bulk([id1, id2], expires_at=date)
   `NotFoundError`.
 - Pinned `openapi.json` snapshot of the platform spec for drift-checking.
 
+[0.5.0]: https://github.com/Strand-AI/strand-official/releases/tag/sdk-python%2Fv0.5.0
+[0.4.1]: https://github.com/Strand-AI/strand-official/releases/tag/sdk-python%2Fv0.4.1
 [0.4.0]: https://github.com/Strand-AI/strand-official/releases/tag/sdk-python%2Fv0.4.0
 [0.3.0]: https://github.com/Strand-AI/strand-official/releases/tag/sdk-python%2Fv0.3.0
 [0.2.0]: https://github.com/Strand-AI/strand-official/releases/tag/sdk-python%2Fv0.2.0

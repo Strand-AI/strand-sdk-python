@@ -41,6 +41,7 @@ from ._errors import (
 )
 from ._jobs import Job, JobEvent
 from ._models import Estimate, JobStatus, PredictResult, Upload
+from ._predict import ModelId
 from ._results import JobResults
 from ._uploads import UploadList
 
@@ -56,6 +57,7 @@ __all__ = [
     "JobResults",
     "JobStatus",
     "JobTimeoutError",
+    "ModelId",
     "NotFoundError",
     "PredictResult",
     "RateLimitError",

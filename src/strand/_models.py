@@ -11,10 +11,26 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from ._results import JobResults
+
+
+# Canonical POSTMAN version label echoed back by the platform on every
+# job-shaped response. Strictly v0.X — even when the caller submitted a
+# legacy alias on input, the platform normalizes before persisting so
+# the value returned here is always the canonical name. Historical
+# rows from before the versioning rollout may surface as `"v0.3"`
+# (sunset; readable but not dispatchable) via `JobStatus.model`; the
+# `PredictResult.model` returned from a *fresh* `client.predict(...)`
+# is always one of the live v0.X labels.
+#
+# Kept type-aliased rather than imported from `_predict.ModelId` so
+# this module avoids a circular import (`_predict` imports from
+# `_models`). The two literals must stay in sync — adding a version
+# means editing both lists.
+PostmanVersionLabel = Literal["v0.3", "v0.4", "v0.5"]
 
 
 def _parse_dt(raw: str | None) -> datetime | None:
@@ -123,10 +139,17 @@ class JobStatus:
     completed_at: datetime | None
     error_message: str | None
     results_available: bool
+    model: PostmanVersionLabel | None
 
     @classmethod
     def _from_dict(cls, raw: dict[str, Any]) -> JobStatus:
         markers_raw = raw.get("markers") or []
+        model_raw = raw.get("model")
+        # Typed as `PostmanVersionLabel | None` for the user-facing surface
+        # (design note §0 hard constraint: emit only v0.X). The platform
+        # normalizes legacy strings before persisting, so anything else
+        # would be a server-side bug — surface it untyped rather than
+        # silently dropping the value.
         return cls(
             id=str(raw["id"]),
             status=str(raw["status"]),
@@ -144,6 +167,7 @@ class JobStatus:
             completed_at=_parse_dt(raw.get("completedAt")),
             error_message=raw.get("errorMessage"),
             results_available=bool(raw.get("resultsAvailable")),
+            model=str(model_raw) if model_raw is not None else None,  # type: ignore[arg-type]
         )
 
     @property
@@ -160,6 +184,13 @@ class PredictResult:
         status: Terminal job status — always `"completed"` for a returned
             `PredictResult` (failures raise `JobFailedError` before this is built).
         credits_used: Credits the platform reserved for the job.
+        model: Canonical POSTMAN version that served the request (e.g.
+            `"v0.5"`). Always a v0.X label — even when the caller passed
+            a legacy alias like `"v10-fullpanel-v2"` on input, the platform
+            normalizes before persisting and the response echoes the
+            canonical name. `None` for backwards-compatibility with older
+            servers that didn't populate the field; new deploys always set
+            it. See `infra/notes/postman-versioning-2026-06.md` §4.
         marker_outputs: When `output_dir` was provided, maps each predicted
             marker name to its local subdirectory under `output_dir/markers/`.
             Empty dict otherwise — call `.results.to_anndata()` or
@@ -173,6 +204,7 @@ class PredictResult:
     job_id: str
     status: str
     credits_used: int
+    model: PostmanVersionLabel | None = None
     marker_outputs: dict[str, Path] = field(default_factory=dict)
     output_dir: Path | None = None
     results: JobResults | None = None

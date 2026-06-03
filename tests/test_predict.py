@@ -102,7 +102,10 @@ def _mock_full_pipeline(markers: list[str]) -> None:
         )
     )
 
-    # Polling fallback (in case SSE drops mid-test).
+    # Polling fallback (in case SSE drops mid-test). Echoes the canonical
+    # v0.X label per design note §0 / §4 — the platform normalizes legacy
+    # aliases before persisting, so this field is always a live v0.X id
+    # (or a historical sunset id like `"v0.3"` on old rows).
     respx.get(f"{API_ROOT}/jobs/{JOB_ID}").mock(
         return_value=Response(
             200,
@@ -112,6 +115,7 @@ def _mock_full_pipeline(markers: list[str]) -> None:
                 "progress": 1.0,
                 "reservedCredits": 42,
                 "markers": markers,
+                "model": "v0.5",
                 "createdAt": None,
                 "startedAt": None,
                 "completedAt": "2026-05-20T10:05:00Z",
@@ -176,6 +180,10 @@ def test_predict_full_pipeline_writes_files(
     assert result.job_id == JOB_ID
     assert result.status == "completed"
     assert result.credits_used == 42
+    # `PredictResult.model` echoes the canonical v0.X label the platform
+    # persisted — never a legacy alias, never None on a fresh response.
+    # This is the §0 hard constraint manifesting on the SDK return type.
+    assert result.model == "v0.5"
     assert result.output_dir == out
     assert set(result.marker_outputs.keys()) == {"CD3", "CD8"}
     assert result.marker_outputs["CD3"] == out / "markers" / "CD3"
@@ -415,7 +423,7 @@ def test_predict_missing_file_raises(client: strand.Client, tmp_path: Path) -> N
 
 @respx.mock
 def test_predict_submit_passes_model_when_provided(client: strand.Client) -> None:
-    """`model=` is forwarded as `model` on the wire body."""
+    """`model=` is forwarded as `model` on the wire body — canonical v0.X."""
     route = respx.post(f"{API_ROOT}/predict").mock(
         return_value=Response(
             202,
@@ -423,11 +431,124 @@ def test_predict_submit_passes_model_when_provided(client: strand.Client) -> Non
         )
     )
 
-    client.predict.submit(UPLOAD_ID, markers=["CD3"], model="v10-fullpanel")
+    client.predict.submit(UPLOAD_ID, markers=["CD3"], model="v0.5")
     sent = json.loads(route.calls[0].request.content)
     assert sent["uploadId"] == UPLOAD_ID
     assert sent["markers"] == ["CD3"]
-    assert sent["model"] == "v10-fullpanel"
+    assert sent["model"] == "v0.5"
+
+
+@respx.mock
+def test_predict_submit_accepts_canonical_v0p4(client: strand.Client) -> None:
+    """v0.4 is the other live canonical id — also forwarded verbatim."""
+    route = respx.post(f"{API_ROOT}/predict").mock(
+        return_value=Response(
+            202,
+            json={"jobId": JOB_ID, "reservedCredits": 7, "status": "queued"},
+        )
+    )
+
+    client.predict.submit(UPLOAD_ID, markers=["CD3"], model="v0.4")
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["model"] == "v0.4"
+
+
+@respx.mock
+def test_predict_submit_legacy_v10_fullpanel_alias_warns_and_resolves(
+    client: strand.Client,
+) -> None:
+    """`model="v10-fullpanel"` is accepted (back-compat) but emits a
+    DeprecationWarning and is rewritten to its canonical v0.X target before
+    the wire body is sent. The SDK normalizes — the server never sees the
+    legacy string — so older callers keep working without a 4xx from a
+    strict server enum."""
+    route = respx.post(f"{API_ROOT}/predict").mock(
+        return_value=Response(
+            202,
+            json={"jobId": JOB_ID, "reservedCredits": 7, "status": "queued"},
+        )
+    )
+
+    with pytest.warns(DeprecationWarning, match="v10-fullpanel.*v0.4"):
+        client.predict.submit(UPLOAD_ID, markers=["CD3"], model="v10-fullpanel")
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["model"] == "v0.4"
+
+
+@respx.mock
+def test_predict_submit_legacy_v10_fullpanel_v2_alias_warns_and_resolves(
+    client: strand.Client,
+) -> None:
+    """`model="v10-fullpanel-v2"` is accepted, warns, and rewrites to v0.5."""
+    route = respx.post(f"{API_ROOT}/predict").mock(
+        return_value=Response(
+            202,
+            json={"jobId": JOB_ID, "reservedCredits": 7, "status": "queued"},
+        )
+    )
+
+    with pytest.warns(DeprecationWarning, match="v10-fullpanel-v2.*v0.5"):
+        client.predict.submit(UPLOAD_ID, markers=["CD3"], model="v10-fullpanel-v2")
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["model"] == "v0.5"
+
+
+@respx.mock
+def test_predict_submit_legacy_v10_alias_warns_and_passes_through_to_server(
+    client: strand.Client,
+) -> None:
+    """`model="v10"` (the sunset alias) emits a DeprecationWarning but is
+    passed through to the server, which will return 400 `unknown_model`.
+    The SDK doesn't client-side-reject because (a) the server is the
+    authority on the live POSTMAN versions, and (b) callers should see
+    one coherent error code, not a SDK-side ValueError plus a server
+    error on the next try."""
+    route = respx.post(f"{API_ROOT}/predict").mock(
+        return_value=Response(
+            400,
+            json={
+                "error": "unknown_model",
+                "message": "Unknown model: v10",
+            },
+        )
+    )
+
+    with (
+        pytest.warns(DeprecationWarning, match="v10.*sunset"),
+        pytest.raises(strand.BadRequestError),
+    ):
+        client.predict.submit(UPLOAD_ID, markers=["CD3"], model="v10")
+    # The wire body carries the original alias — the server gets to
+    # emit a single canonical `unknown_model` response. If the SDK
+    # had rewritten "v10" → "v0.3", the server would still 400, but
+    # the response message would no longer match what the caller sent.
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["model"] == "v10"
+
+
+@respx.mock
+def test_predict_submit_unknown_model_passes_through_to_server(
+    client: strand.Client,
+) -> None:
+    """An unknown string is forwarded verbatim — no SDK-side warning,
+    no client-side validation. The server returns 400 unknown_model.
+
+    This keeps the SDK forward-compatible with new POSTMAN versions
+    added on the server without a SDK release."""
+    route = respx.post(f"{API_ROOT}/predict").mock(
+        return_value=Response(
+            400,
+            json={
+                "error": "unknown_model",
+                "message": "Unknown model: v0.99",
+            },
+        )
+    )
+
+    with pytest.raises(strand.BadRequestError):
+        client.predict.submit(UPLOAD_ID, markers=["CD3"], model="v0.99")
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["model"] == "v0.99"
 
 
 @respx.mock
@@ -548,9 +669,9 @@ def test_predict_wait_false_forwards_model(
         )
     )
 
-    client.predict(blob, markers=["CD3"], model="v10", wait=False)
+    client.predict(blob, markers=["CD3"], model="v0.4", wait=False)
     sent = json.loads(submit_route.calls[0].request.content)
-    assert sent["model"] == "v10"
+    assert sent["model"] == "v0.4"
 
 
 @respx.mock
