@@ -488,7 +488,7 @@ def test_predict_submit_unknown_model_passes_through_to_server(
     """An unknown string is forwarded verbatim — no SDK-side warning,
     no client-side validation. The server returns 400 unknown_model.
 
-    This keeps the SDK forward-compatible with new POSTMAN versions
+    This keeps the SDK forward-compatible with new Prism versions
     added on the server without a SDK release."""
     route = respx.post(f"{API_ROOT}/predict").mock(
         return_value=Response(

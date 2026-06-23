@@ -37,7 +37,7 @@ No action required if you already migrated to canonical v0.X ids per
 ## [0.5.0] - 2026-06-03
 
 ### Changed
-- `ModelId` is now `Literal["v0.4", "v0.5"]` — the canonical POSTMAN
+- `ModelId` is now `Literal["v0.4", "v0.5"]` — the canonical Prism
   version track from the platform's `POSTMAN_VERSIONS` map. The earlier
   `"v10"`, `"v10-fullpanel"`, and `"v10-fullpanel-v2"` strings are still
   accepted on input as deprecated aliases (each emits a

@@ -3,7 +3,7 @@
   "info": {
     "title": "Strand Platform API",
     "version": "v1",
-    "description": "REST surface for uploading WSIs, submitting POSTMAN inference jobs, and streaming results. All endpoints require an `Authorization: Bearer sk-strand-...` header. Generate keys at `/settings/api-keys`."
+    "description": "REST surface for uploading WSIs, submitting Prism inference jobs, and streaming results. All endpoints require an `Authorization: Bearer sk-strand-...` header. Generate keys at `/settings/api-keys`."
   },
   "servers": [
     {

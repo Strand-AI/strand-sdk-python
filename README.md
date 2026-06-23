@@ -72,7 +72,7 @@ runtime check.
 
 ### Choosing a model
 
-`predict.submit` and `predict(...)` accept an optional `model=`. Live POSTMAN
+`predict.submit` and `predict(...)` accept an optional `model=`. Live Prism
 versions:
 
 - `"v0.4"` — 192-marker panel, original training.
