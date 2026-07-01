@@ -72,7 +72,7 @@ class Predict:
         Args:
             upload_id: Sample/upload identifier to run inference against.
             markers: Markers to predict.
-            model: Optional explicit Prism version. One of `"v0.4"` (192-marker
+            model: Optional explicit Lattice version. One of `"v0.4"` (192-marker
                 original) or `"v0.5"` (192-marker retrained, current default).
                 Both share GenePT embeddings, so the marker vocabulary is
                 identical between them — picking a version is a model-weights

@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from ._results import JobResults
 
 
-# Canonical Prism version label echoed back by the platform on every
+# Canonical Lattice version label echoed back by the platform on every
 # job-shaped response. Strictly v0.X. Historical rows from before the
 # versioning rollout may surface as `"v0.1"` (sunset; readable but not
 # dispatchable) via `JobStatus.model` — that's the badge string for
@@ -190,7 +190,7 @@ class PredictResult:
         status: Terminal job status — always `"completed"` for a returned
             `PredictResult` (failures raise `JobFailedError` before this is built).
         credits_used: Credits the platform reserved for the job.
-        model: Canonical Prism version that served the request (e.g.
+        model: Canonical Lattice version that served the request (e.g.
             `"v0.5"`). Always a v0.X label — even when the caller passed
             a legacy alias like `"v10-fullpanel-v2"` on input, the platform
             normalizes before persisting and the response echoes the
