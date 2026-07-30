@@ -21,7 +21,7 @@ ProgressCb = Callable[[str, float], None]
 # Canonical SDK-routable model ids. Mirrors the platform's
 # `POSTMAN_VERSIONS` map (see `infra/notes/postman-versioning-2026-06.md`
 # §2 + §4). Omit `model` to let the platform pick the current default
-# (today: `"v0.5"`).
+# (today: `"v0.7"`).
 #
 # Sunset versions (v0.1, formerly the `"v10"` 35-marker base) are not
 # selectable — the server returns 400 `unknown_model`. Legacy aliases
@@ -31,7 +31,7 @@ ProgressCb = Callable[[str, float], None]
 # `Literal` is intentionally NOT a strict-enum type-guard at runtime —
 # callers can still pass any `str` (forward-compat with new server
 # versions cut without a SDK release); the server is the authority.
-ModelId = Literal["v0.4", "v0.5"]
+ModelId = Literal["v0.4", "v0.5", "v0.7"]
 
 
 def _coerce_markers(markers: Iterable[str]) -> list[str]:
@@ -72,12 +72,12 @@ class Predict:
         Args:
             upload_id: Sample/upload identifier to run inference against.
             markers: Markers to predict.
-            model: Optional explicit Lattice version. One of `"v0.4"` (192-marker
-                original) or `"v0.5"` (192-marker retrained, current default).
-                Both share GenePT embeddings, so the marker vocabulary is
-                identical between them — picking a version is a model-weights
-                swap, not a vocab swap. When omitted, the platform picks the
-                current default (`"v0.5"`).
+            model: Optional explicit Lattice version. `"v0.7"` is the current
+                dispatchable version and default. `"v0.4"` / `"v0.5"` remain
+                typed because the public API preserves their canonical ids for
+                structured `model_sunset` errors. The historical `"v0.6"` id is
+                intentionally output-only and is not a valid new-job selection.
+                When omitted, the platform picks the current default (`"v0.7"`).
 
                 Legacy aliases (`"v10"`, `"v10-fullpanel"`, `"v10-fullpanel-v2"`)
                 were dropped on 2026-06-03 — the server now rejects them with

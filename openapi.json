@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Strand Platform API",
+    "title": "Strand AI Platform API",
     "version": "v1",
     "description": "REST surface for uploading WSIs, submitting Lattice inference jobs, and streaming results. All endpoints require an `Authorization: Bearer sk-strand-...` header. Generate keys at `/settings/api-keys`."
   },
@@ -48,6 +48,7 @@
         "type": "object",
         "required": [
           "uploadId",
+          "uploadUrl",
           "gcsPath"
         ],
         "properties": {
@@ -57,14 +58,10 @@
           },
           "uploadUrl": {
             "type": "string",
-            "description": "Resumable upload URL — PUT slide bytes here. Omitted when `existing: true`."
+            "description": "Resumable upload URL — PUT slide bytes here"
           },
           "gcsPath": {
             "type": "string"
-          },
-          "existing": {
-            "type": "boolean",
-            "description": "True when `contentSha256` matched an existing non-archived sample in the same org. In that case `uploadUrl` is omitted and the byte upload should be skipped."
           }
         }
       },
@@ -99,6 +96,68 @@
               "sharp",
               "stub"
             ]
+          }
+        }
+      },
+      "Upload": {
+        "type": "object",
+        "required": [
+          "id",
+          "filename",
+          "fileSize",
+          "status",
+          "gcsPath"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "fileSize": {
+            "type": "string",
+            "description": "bytes, stringified bigint"
+          },
+          "status": {
+            "type": "string",
+            "description": "uploading | preprocessing | ready | preprocess_failed"
+          },
+          "gcsPath": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "widthPx": {
+            "type": "integer",
+            "nullable": true
+          },
+          "heightPx": {
+            "type": "integer",
+            "nullable": true
+          }
+        }
+      },
+      "UploadList": {
+        "type": "object",
+        "required": [
+          "uploads"
+        ],
+        "properties": {
+          "uploads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Upload"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true,
+            "description": "Opaque cursor for the next page, or null on last page"
           }
         }
       },
@@ -180,6 +239,31 @@
               "type": "string"
             }
           },
+          "model": {
+            "type": "string",
+            "nullable": true,
+            "description": "Canonical Lattice version the job ran under (e.g. `\"v0.5\"`, `\"v0.7\"`). Always a `v0.X` label. Historical jobs may surface `\"v0.1\"` (the renumbered legacy 35-marker base — sunset; readable but not dispatchable). `null` only on very old rows that predate the field."
+          },
+          "metadata": {
+            "type": "object",
+            "nullable": true,
+            "description": "Free-form job metadata. SDK-relevant fields include `modal.endpoint_url` (the Modal URL the dispatcher hit) and `modal.model` (mirror of the top-level `model`).",
+            "properties": {
+              "modal": {
+                "type": "object",
+                "properties": {
+                  "endpoint_url": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "model": {
+                    "type": "string",
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time",
@@ -222,11 +306,128 @@
             "format": "date-time"
           }
         }
+      },
+      "ExpirationUpdate": {
+        "type": "object",
+        "description": "Provide exactly one of `expiresAt`, `neverExpire: true`, or `useOrgDefault: true`. `neverExpire: true` is sugar for `expiresAt: null` (custom). `useOrgDefault: true` clears the custom expiration and follows the org's default policy.",
+        "properties": {
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "neverExpire": {
+            "type": "boolean"
+          },
+          "useOrgDefault": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
+      },
+      "Sample": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "expiresAtSource": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "org_default",
+              "custom",
+              null
+            ]
+          },
+          "expirationChangedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "expirationChangedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "batchId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
       }
     }
   },
   "paths": {
     "/uploads": {
+      "get": {
+        "summary": "List uploads for the calling org",
+        "description": "Returns non-archived uploads newest-first. Cursor-paginated; pass the prior response's `nextCursor` to fetch the next page.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Upload list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid limit or cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "summary": "Initiate a resumable upload",
         "requestBody": {
@@ -249,11 +450,6 @@
                   },
                   "contentType": {
                     "type": "string"
-                  },
-                  "contentSha256": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{64}$",
-                    "description": "Optional client-computed sha256 of the file bytes (64 lowercase hex chars). When supplied, the platform checks for an existing non-archived sample in the same org with the same hash; on a hit the response carries `existing: true` and the existing `uploadId` instead of minting a new signed URL."
                   }
                 }
               }
@@ -262,7 +458,7 @@
         },
         "responses": {
           "200": {
-            "description": "Resumable upload URL — or, when `contentSha256` matched an existing sample, that sample's metadata with `existing: true`.",
+            "description": "Resumable upload URL",
             "content": {
               "application/json": {
                 "schema": {
@@ -273,6 +469,44 @@
           },
           "401": {
             "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/uploads/{id}": {
+      "get": {
+        "summary": "Fetch a single upload",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Upload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Upload"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Upload not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -402,6 +636,15 @@
                       "type": "string"
                     },
                     "minItems": 1
+                  },
+                  "model": {
+                    "type": "string",
+                    "enum": [
+                      "v0.4",
+                      "v0.5",
+                      "v0.7"
+                    ],
+                    "description": "Optional explicit Lattice version. Only `v0.7` is dispatchable and is the current default; omit `model` to let the platform pick it. `v0.4`/`v0.5` are READ-ONLY as of 2026-06-23: they remain in this enum because they still appear on historical job records, but requesting one returns 400 `model_sunset` (with `currentDefault`). Legacy model strings return 400 `unknown_model`."
                   }
                 }
               }
@@ -498,6 +741,71 @@
         }
       }
     },
+    "/jobs/{id}/cancel": {
+      "post": {
+        "summary": "Cancel an in-flight job",
+        "description": "Atomically flips `status` to `cancelled`, refunds the credit reservation, and releases the per-org slot. Returns 400 if the job is already terminal (`completed`, `failed`, or `cancelled`).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "status"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "cancelled"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Job already terminal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/jobs/{id}/stream": {
       "get": {
         "summary": "Stream job status (SSE)",
@@ -555,6 +863,263 @@
           },
           "409": {
             "description": "Job has not completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/samples/{id}/expiration": {
+      "patch": {
+        "summary": "Set sample expiration",
+        "description": "Set a sample to expire on a specific date, set it to never expire, or clear any custom expiration and follow the org default. Caller must be the sample's creator, an org owner/admin, or a Strand admin.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpirationUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated sample",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sample"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this sample",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sample not found in this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/samples/expiration": {
+      "patch": {
+        "summary": "Set sample expiration (bulk)",
+        "description": "All-or-nothing: if any sample fails the permission gate the whole call is rejected before any writes. Max 500 IDs per call.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/ExpirationUpdate"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "sampleIds"
+                    ],
+                    "properties": {
+                      "sampleIds": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 500,
+                        "items": {
+                          "type": "string",
+                          "format": "uuid"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bulk update result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "updated",
+                    "batchId"
+                  ],
+                  "properties": {
+                    "updated": {
+                      "type": "integer"
+                    },
+                    "batchId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "One or more samples are not in the API key's org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/samples/{id}/restore": {
+      "post": {
+        "summary": "Restore a sample from Trash",
+        "description": "Available within the 7-day Trash window. Brings the sample back to the active list and extends its expiration so it isn't immediately re-trashed. Same permission gate as the expiration endpoints.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Restored sample",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "trashedAt": {
+                      "type": "null"
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this sample",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sample not found in this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Sample is not archived",
             "content": {
               "application/json": {
                 "schema": {

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import struct
 from pathlib import Path
+from typing import get_args
 
 import pytest
 import respx
@@ -421,6 +422,10 @@ def test_predict_missing_file_raises(client: strand.Client, tmp_path: Path) -> N
         client.predict(tmp_path / "missing.svs", markers=["CD3"])
 
 
+def test_model_id_includes_current_version_but_not_output_only_v0p6() -> None:
+    assert get_args(strand.ModelId) == ("v0.4", "v0.5", "v0.7")
+
+
 @respx.mock
 def test_predict_submit_passes_model_when_provided(client: strand.Client) -> None:
     """`model=` is forwarded as `model` on the wire body — canonical v0.X."""
@@ -440,7 +445,7 @@ def test_predict_submit_passes_model_when_provided(client: strand.Client) -> Non
 
 @respx.mock
 def test_predict_submit_accepts_canonical_v0p4(client: strand.Client) -> None:
-    """v0.4 is the other live canonical id — also forwarded verbatim."""
+    """Historical canonical ids are forwarded for the server's sunset error."""
     route = respx.post(f"{API_ROOT}/predict").mock(
         return_value=Response(
             202,
@@ -451,6 +456,20 @@ def test_predict_submit_accepts_canonical_v0p4(client: strand.Client) -> None:
     client.predict.submit(UPLOAD_ID, markers=["CD3"], model="v0.4")
     sent = json.loads(route.calls[0].request.content)
     assert sent["model"] == "v0.4"
+
+
+@respx.mock
+def test_predict_submit_accepts_current_v0p7(client: strand.Client) -> None:
+    route = respx.post(f"{API_ROOT}/predict").mock(
+        return_value=Response(
+            202,
+            json={"jobId": JOB_ID, "reservedCredits": 7, "status": "queued"},
+        )
+    )
+
+    client.predict.submit(UPLOAD_ID, markers=["CD3"], model="v0.7")
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["model"] == "v0.7"
 
 
 @respx.mock

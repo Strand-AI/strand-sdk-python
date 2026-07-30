@@ -17,10 +17,10 @@ The SDK reads zarr directly via numpy — no dependency on zarr-python.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ._errors import StrandError
 
@@ -260,7 +260,10 @@ class JobResults:
         return ad.AnnData(
             X=x,
             var={"channel": names},
-            obsm={"spatial": spatial},
+            # anndata's stub narrows obsm values to Sequence[Any], while a
+            # NumPy ndarray is accepted at runtime but does not implement the
+            # nominal Sequence protocol in current NumPy typing.
+            obsm={"spatial": cast(Sequence[Any], spatial)},
             uns={
                 "strand": {
                     "job_id": self.job_id,

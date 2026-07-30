@@ -34,9 +34,9 @@ if TYPE_CHECKING:
 #
 # Kept type-aliased rather than imported from `_predict.ModelId` so
 # this module avoids a circular import (`_predict` imports from
-# `_models`). The two literals must stay in sync — adding a version
-# means editing both lists.
-PostmanVersionLabel = Literal["v0.1", "v0.4", "v0.5"]
+# `_models`). Output labels include sunset versions that can appear on
+# historical jobs, so this is intentionally broader than new-job `ModelId`.
+PostmanVersionLabel = Literal["v0.1", "v0.4", "v0.5", "v0.6", "v0.7"]
 
 
 def _parse_dt(raw: str | None) -> datetime | None:
@@ -191,7 +191,7 @@ class PredictResult:
             `PredictResult` (failures raise `JobFailedError` before this is built).
         credits_used: Credits the platform reserved for the job.
         model: Canonical Lattice version that served the request (e.g.
-            `"v0.5"`). Always a v0.X label — even when the caller passed
+            `"v0.7"`). Always a v0.X label — even when the caller passed
             a legacy alias like `"v10-fullpanel-v2"` on input, the platform
             normalizes before persisting and the response echoes the
             canonical name. `None` for backwards-compatibility with older

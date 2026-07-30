@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Release notes on GitHub are extracted from the section header matching the
 published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
+## [0.6.0] - 2026-07-30
+
+### Changed
+
+- Added `"v0.7"` to the typed `ModelId` input surface and made the current
+  default explicit in the SDK documentation.
+- Added `"v0.6"` and `"v0.7"` to historical job/result model labels. v0.6 is
+  intentionally output-only because it is sunset for new submissions.
+
 ## [0.5.1] - 2026-06-03
 
 ### Changed
@@ -174,6 +183,8 @@ client.samples.set_expiration_bulk([id1, id2], expires_at=date)
   `NotFoundError`.
 - Pinned `openapi.json` snapshot of the platform spec for drift-checking.
 
+[0.6.0]: https://github.com/Strand-AI/strand-official/releases/tag/sdk-python%2Fv0.6.0
+[0.5.1]: https://github.com/Strand-AI/strand-official/releases/tag/sdk-python%2Fv0.5.1
 [0.5.0]: https://github.com/Strand-AI/strand-official/releases/tag/sdk-python%2Fv0.5.0
 [0.4.1]: https://github.com/Strand-AI/strand-official/releases/tag/sdk-python%2Fv0.4.1
 [0.4.0]: https://github.com/Strand-AI/strand-official/releases/tag/sdk-python%2Fv0.4.0

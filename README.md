@@ -75,20 +75,19 @@ runtime check.
 `predict.submit` and `predict(...)` accept an optional `model=`. Live Lattice
 versions:
 
-- `"v0.4"` — 192-marker panel, original training.
-- `"v0.5"` — 192-marker panel, retrained (current default).
+- `"v0.7"` — current dispatchable version and default.
 
-Both share the same GenePT embeddings, so the marker vocabulary is identical
-— picking a version is a model-weights swap, not a vocab swap. Omit `model`
-to let the platform pick the current default (`"v0.5"`).
+Omit `model` to let the platform pick the current default (`"v0.7"`). The
+older `"v0.4"`, `"v0.5"`, and `"v0.6"` labels can appear on historical jobs
+but are sunset for new submissions.
 
 ```python
 result = client.predict(
     "slide.svs",
     markers=["CD8", "Ki67", "PanCK"],
-    model="v0.5",
+    model="v0.7",
 )
-print(result.model)  # → "v0.5" (the v0.X label the platform actually ran)
+print(result.model)  # → "v0.7" (the v0.X label the platform actually ran)
 ```
 
 `PredictResult.model` and `JobStatus.model` always carry the canonical v0.X
