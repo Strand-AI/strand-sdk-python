@@ -95,6 +95,20 @@ label. Historical jobs from before the versioning rollout may surface as
 `"v0.1"` (the renumbered legacy 35-marker base — sunset; readable but not
 dispatchable).
 
+### Setting slide scale
+
+If a slide's physical pixel size is missing or incorrect, set the base-level
+microns per pixel before submitting a job. Omit the third argument for
+isotropic pixels:
+
+```python
+client.samples.set_mpp(upload.id, 0.26)
+client.samples.set_mpp(upload.id, 0.26, 0.25)  # separate x/y values
+```
+
+The user-reported value takes precedence over embedded slide metadata for
+subsequent inference jobs.
+
 #### Migration from `v10-*` names
 
 The earlier `"v10"`, `"v10-fullpanel"`, and `"v10-fullpanel-v2"` names were

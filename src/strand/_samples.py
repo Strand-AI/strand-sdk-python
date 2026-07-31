@@ -1,9 +1,10 @@
-"""Samples namespace — per-sample expiration overrides + restore.
+"""Samples namespace — physical scale, expiration overrides, and restore.
 
 Exposed as `client.samples` (Phase 2). Mirrors the REST endpoints:
 
     PATCH /api/v1/samples/{id}/expiration
     PATCH /api/v1/samples/expiration         (bulk)
+    PATCH /api/v1/samples/{id}/mpp
     POST  /api/v1/samples/{id}/restore
 
 The expiration modes are mutually exclusive — the SDK validates this client-
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from math import isfinite
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -64,6 +66,33 @@ class Samples:
 
     def __init__(self, http: HttpSession) -> None:
         self._http = http
+
+    def set_mpp(
+        self,
+        sample_id: str,
+        mpp_x: float,
+        mpp_y: float | None = None,
+    ) -> dict[str, Any]:
+        """Set the user-reported physical pixel size for a sample.
+
+        The value is measured in microns per pixel at the slide's base level.
+        It takes precedence over embedded slide metadata for subsequent
+        inference jobs. Omit `mpp_y` for isotropic pixels.
+
+        Args:
+            sample_id: UUID of the sample or completed upload.
+            mpp_x: Horizontal microns per pixel, greater than 0 and at most 100.
+            mpp_y: Optional vertical microns per pixel. Defaults to `mpp_x`.
+
+        Returns:
+            Server payload with `id` and normalized `userMpp.{x,y}` values.
+        """
+        x = _validate_mpp(mpp_x, "mpp_x")
+        if mpp_y is None:
+            mpp: float | dict[str, float] = x
+        else:
+            mpp = {"x": x, "y": _validate_mpp(mpp_y, "mpp_y")}
+        return self._http.request_json("PATCH", f"/samples/{sample_id}/mpp", json={"mpp": mpp})
 
     def set_expiration(
         self,
@@ -137,3 +166,12 @@ class Samples:
         `set_expiration`.
         """
         return self._http.request_json("POST", f"/samples/{sample_id}/restore")
+
+
+def _validate_mpp(value: float, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a number greater than 0 and at most 100")
+    result = float(value)
+    if not isfinite(result) or result <= 0 or result > 100:
+        raise ValueError(f"{name} must be a number greater than 0 and at most 100")
+    return result

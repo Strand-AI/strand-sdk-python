@@ -328,6 +328,71 @@
           }
         }
       },
+      "MppUpdate": {
+        "type": "object",
+        "required": [
+          "mpp"
+        ],
+        "properties": {
+          "mpp": {
+            "oneOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 100
+              },
+              {
+                "type": "object",
+                "required": [
+                  "x",
+                  "y"
+                ],
+                "properties": {
+                  "x": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 100
+                  },
+                  "y": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 100
+                  }
+                }
+              }
+            ],
+            "description": "User-reported microns per pixel. Use a number for isotropic pixels or provide both x and y axes."
+          }
+        }
+      },
+      "MppUpdateResult": {
+        "type": "object",
+        "required": [
+          "id",
+          "userMpp"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userMpp": {
+            "type": "object",
+            "required": [
+              "x",
+              "y"
+            ],
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      },
       "Sample": {
         "type": "object",
         "required": [
@@ -1034,6 +1099,85 @@
           },
           "422": {
             "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/samples/{id}/mpp": {
+      "patch": {
+        "summary": "Set sample microns per pixel",
+        "description": "Set the user-reported physical pixel size for a sample. This value takes precedence over slide metadata and is used for pixel-scale normalization on subsequent inference jobs.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MppUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated microns per pixel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MppUpdateResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Body is not valid JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sample not found in this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "MPP is missing, out of range, or missing an axis",
             "content": {
               "application/json": {
                 "schema": {
