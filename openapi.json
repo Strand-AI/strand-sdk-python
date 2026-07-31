@@ -48,8 +48,8 @@
         "type": "object",
         "required": [
           "uploadId",
-          "uploadUrl",
-          "gcsPath"
+          "gcsPath",
+          "existing"
         ],
         "properties": {
           "uploadId": {
@@ -58,10 +58,14 @@
           },
           "uploadUrl": {
             "type": "string",
-            "description": "Resumable upload URL — PUT slide bytes here"
+            "description": "Resumable upload URL. Present for a new upload; omitted when `existing` is true."
           },
           "gcsPath": {
             "type": "string"
+          },
+          "existing": {
+            "type": "boolean",
+            "description": "True when `contentSha256` matched an existing active upload in the same organization."
           }
         }
       },
@@ -247,22 +251,7 @@
           "metadata": {
             "type": "object",
             "nullable": true,
-            "description": "Free-form job metadata. SDK-relevant fields include `modal.endpoint_url` (the Modal URL the dispatcher hit) and `modal.model` (mirror of the top-level `model`).",
-            "properties": {
-              "modal": {
-                "type": "object",
-                "properties": {
-                  "endpoint_url": {
-                    "type": "string",
-                    "nullable": true
-                  },
-                  "model": {
-                    "type": "string",
-                    "nullable": true
-                  }
-                }
-              }
-            }
+            "description": "Free-form metadata attached to the job."
           },
           "createdAt": {
             "type": "string",
@@ -564,6 +553,11 @@
                   },
                   "contentType": {
                     "type": "string"
+                  },
+                  "contentSha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Optional client-computed SHA-256. On a match within the calling organization, the response returns the existing upload and skips byte transfer."
                   }
                 }
               }

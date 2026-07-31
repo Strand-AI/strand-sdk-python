@@ -268,12 +268,13 @@ uv tool run --from "openapi-python-client>=0.21" --with "click<8.2" \
     --meta none --overwrite
 ```
 
-To refresh `openapi.json` itself against a live server:
+To refresh `openapi.json` and the public docs spec from the canonical platform
+source:
 
 ```bash
-curl https://app.strandai.com/api/v1/openapi.json -o openapi.json
-# or against local dev:
-# curl http://localhost:3000/api/v1/openapi.json -o openapi.json
+cd ../../../platform
+pnpm openapi:generate
+pnpm openapi:check
 ```
 
 ## Development
