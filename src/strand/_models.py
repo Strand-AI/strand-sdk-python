@@ -182,6 +182,34 @@ class JobStatus:
 
 
 @dataclass(frozen=True, slots=True)
+class OmeTiffExport:
+    """Point-in-time status for a job's asynchronous OME-TIFF export."""
+
+    status: Literal["pending", "running", "ready", "failed"]
+    format: Literal["ome-tiff"]
+    size_bytes: int | None
+    download_url: str | None
+    download_url_expires_at: datetime | None
+    error: str | None
+    updated_at: datetime | None
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> OmeTiffExport:
+        size_raw = raw.get("sizeBytes")
+        return cls(
+            status=str(raw["status"]),  # type: ignore[arg-type]
+            format=str(raw["format"]),  # type: ignore[arg-type]
+            size_bytes=int(size_raw) if isinstance(size_raw, int) else None,
+            download_url=(
+                str(raw["downloadUrl"]) if raw.get("downloadUrl") is not None else None
+            ),
+            download_url_expires_at=_parse_dt(raw.get("downloadUrlExpiresAt")),
+            error=str(raw["error"]) if raw.get("error") is not None else None,
+            updated_at=_parse_dt(raw.get("updatedAt")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class PredictResult:
     """Outcome of a one-shot `client.predict(...)` call.
 

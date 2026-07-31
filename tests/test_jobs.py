@@ -383,3 +383,78 @@ def test_download_results_to_anndata(client: strand.Client) -> None:
         adata.obsm["spatial"],
         np.array([[0, 0], [1, 0], [0, 1], [1, 1]]),
     )
+
+
+@respx.mock
+def test_ome_tiff_export_status_methods(client: strand.Client) -> None:
+    job_id = "22222222-2222-2222-2222-222222222222"
+    endpoint = f"{API_ROOT}/jobs/{job_id}/exports/ome-tiff"
+    pending = {
+        "status": "pending",
+        "format": "ome-tiff",
+        "sizeBytes": None,
+        "updatedAt": "2026-07-30T10:00:00Z",
+    }
+    ready = {
+        "status": "ready",
+        "format": "ome-tiff",
+        "sizeBytes": 1024,
+        "downloadUrl": "https://storage.example/export.ome.tiff?signature=test",
+        "downloadUrlExpiresAt": "2026-07-30T11:00:00Z",
+        "updatedAt": "2026-07-30T10:05:00Z",
+    }
+    post = respx.post(endpoint).mock(return_value=Response(202, json=pending))
+    get = respx.get(endpoint).mock(return_value=Response(200, json=ready))
+
+    job = strand.Job(id=job_id, reserved_credits=None, client=client)
+    requested = job.request_ome_tiff_export()
+    current = job.get_ome_tiff_export()
+
+    assert post.called
+    assert get.called
+    assert requested.status == "pending"
+    assert current.status == "ready"
+    assert current.size_bytes == 1024
+    assert current.download_url_expires_at is not None
+
+
+@respx.mock
+def test_export_ome_tiff_waits_and_downloads(
+    client: strand.Client, tmp_path: Path
+) -> None:
+    job_id = "22222222-2222-2222-2222-222222222222"
+    endpoint = f"{API_ROOT}/jobs/{job_id}/exports/ome-tiff"
+    download_url = "https://storage.example/export.ome.tiff?signature=test"
+    respx.post(endpoint).mock(
+        return_value=Response(
+            202,
+            json={
+                "status": "running",
+                "format": "ome-tiff",
+                "sizeBytes": None,
+                "updatedAt": None,
+            },
+        )
+    )
+    respx.get(endpoint).mock(
+        return_value=Response(
+            200,
+            json={
+                "status": "ready",
+                "format": "ome-tiff",
+                "sizeBytes": 4,
+                "downloadUrl": download_url,
+                "downloadUrlExpiresAt": "2026-07-30T11:00:00Z",
+                "updatedAt": "2026-07-30T10:05:00Z",
+            },
+        )
+    )
+    download = respx.get(download_url).mock(return_value=Response(200, content=b"TIFF"))
+
+    target = tmp_path / "nested" / "result.ome.tiff"
+    job = strand.Job(id=job_id, reserved_credits=None, client=client)
+    written = job.export_ome_tiff(str(target), timeout=1, poll_interval=0)
+
+    assert download.called
+    assert written == target
+    assert target.read_bytes() == b"TIFF"

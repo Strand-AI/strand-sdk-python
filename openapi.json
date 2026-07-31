@@ -307,6 +307,55 @@
           }
         }
       },
+      "OmeTiffExport": {
+        "type": "object",
+        "required": [
+          "status",
+          "format",
+          "sizeBytes",
+          "updatedAt"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "ready",
+              "failed"
+            ]
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "ome-tiff"
+            ]
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "nullable": true
+          },
+          "downloadUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "One-hour signed download URL. Present only when status is `ready`."
+          },
+          "downloadUrlExpiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Signed URL expiry. Present only when status is `ready`."
+          },
+          "error": {
+            "type": "string",
+            "description": "Export failure message. Present only when status is `failed`."
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
       "ExpirationUpdate": {
         "type": "object",
         "description": "Provide exactly one of `expiresAt`, `neverExpire: true`, or `useOrgDefault: true`. `neverExpire: true` is sugar for `expiresAt: null` (custom). `useOrgDefault: true` clears the custom expiration and follows the org's default policy.",
@@ -932,6 +981,132 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/{id}/exports/ome-tiff": {
+      "post": {
+        "summary": "Request an OME-TIFF export",
+        "description": "Starts an asynchronous OME-TIFF export for a completed job. The request is idempotent: an in-progress or cached export is returned instead of starting a duplicate. Poll this same path with GET while the response status is `pending` or `running`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cached export is ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OmeTiffExport"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Export is pending or running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OmeTiffExport"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Job not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Job has not completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The last export attempt failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OmeTiffExport"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Get OME-TIFF export status",
+        "description": "Returns export status and, when ready, a one-hour signed download URL. Returns 404 `not_started` until an export has been requested with POST.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Export is ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OmeTiffExport"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Export is pending or running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OmeTiffExport"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Job not found or export not started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The last export attempt failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OmeTiffExport"
                 }
               }
             }

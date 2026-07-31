@@ -6,13 +6,14 @@ import json
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
 from httpx_sse import EventSource, SSEError
 
 from ._errors import JobFailedError, JobTimeoutError, StrandError
-from ._models import JobStatus
+from ._models import JobStatus, OmeTiffExport
 from ._results import JobResults
 
 if TYPE_CHECKING:
@@ -221,3 +222,74 @@ class Job:
         if path is None:
             return results.to_anndata()
         return results.download_to(path)
+
+    def request_ome_tiff_export(self) -> OmeTiffExport:
+        """Start or reuse an asynchronous OME-TIFF export.
+
+        The request is idempotent. A completed job starts rendering on the
+        first call; later calls return the in-progress or cached export.
+        """
+        raw = self._http.request_json(
+            "POST",
+            f"/jobs/{self.id}/exports/ome-tiff",
+            expected=(200, 202),
+        )
+        return OmeTiffExport._from_dict(raw)
+
+    def get_ome_tiff_export(self) -> OmeTiffExport:
+        """Fetch the current OME-TIFF export status and signed URL, if ready."""
+        raw = self._http.request_json(
+            "GET",
+            f"/jobs/{self.id}/exports/ome-tiff",
+            expected=(200, 202),
+        )
+        return OmeTiffExport._from_dict(raw)
+
+    def export_ome_tiff(
+        self,
+        path: str,
+        *,
+        timeout: float | None = None,
+        poll_interval: float = 2.0,
+    ) -> Path:
+        """Request, wait for, and download this job's OME-TIFF result.
+
+        Args:
+            path: Destination file path. Parent directories are created.
+            timeout: Maximum seconds to wait. ``None`` waits forever.
+            poll_interval: Seconds between export-status requests.
+
+        Returns:
+            The destination :class:`Path`.
+        """
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        export = self.request_ome_tiff_export()
+        while export.status != "ready":
+            if deadline is not None and time.monotonic() >= deadline:
+                raise JobTimeoutError(
+                    f"OME-TIFF export for job {self.id} was not ready within {timeout}s",
+                )
+            sleep_for = poll_interval
+            if deadline is not None:
+                sleep_for = min(sleep_for, max(0.0, deadline - time.monotonic()))
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            export = self.get_ome_tiff_export()
+
+        if export.download_url is None:
+            raise StrandError("Ready OME-TIFF export did not include a download URL")
+
+        destination = Path(path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        download_timeout = httpx.Timeout(connect=60.0, read=None, write=60.0, pool=60.0)
+        with httpx.stream(
+            "GET",
+            export.download_url,
+            follow_redirects=True,
+            timeout=download_timeout,
+        ) as response:
+            response.raise_for_status()
+            with destination.open("wb") as output:
+                for chunk in response.iter_bytes():
+                    output.write(chunk)
+        return destination

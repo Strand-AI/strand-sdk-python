@@ -61,6 +61,8 @@ print(f"submitted {job.id}")
 # Later (same process or a fresh one via `client.jobs.get(job_id)`):
 job.wait()
 result = job.download_results()      # AnnData
+# or render a single pyramidal OME-TIFF for QuPath or Fiji:
+path = job.export_ome_tiff("result.ome.tiff", timeout=1800)
 # or stream events:
 for event in job.stream_events():
     print(event.status, event.progress)
