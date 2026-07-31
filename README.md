@@ -120,6 +120,24 @@ client.samples.set_mpp(upload.id, 0.26, 0.25)  # separate x/y values
 The user-reported value takes precedence over embedded slide metadata for
 subsequent inference jobs.
 
+### Tagging samples
+
+Tags are free-form, org-scoped labels — cohort, site, status — and are the
+same ones the dashboard shows. Use them to group a batch you can filter on
+later:
+
+```python
+client.samples.add_tag(upload.id, "histowiz")     # -> {"tag": ..., "created": True}
+client.samples.list_tags(upload.id)               # -> [{"tag": "histowiz", ...}]
+client.samples.remove_tag(upload.id, "histowiz")  # -> True
+```
+
+Tags are normalized server-side (trimmed and lowercased), so `"HistoWiz"` and
+`"histowiz"` are one tag. `add_tag` is idempotent — re-tagging returns
+`created=False` instead of raising, so re-running a pipeline is safe. A tag
+may be at most 50 characters and may not contain a comma (the samples list
+uses commas as its filter delimiter).
+
 #### Migration from `v10-*` names
 
 The earlier `"v10"`, `"v10-fullpanel"`, and `"v10-fullpanel-v2"` names were

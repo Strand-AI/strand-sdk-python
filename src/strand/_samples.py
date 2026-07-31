@@ -1,11 +1,14 @@
-"""Samples namespace — physical scale, expiration overrides, and restore.
+"""Samples namespace — physical scale, expiration overrides, restore, tags.
 
 Exposed as `client.samples` (Phase 2). Mirrors the REST endpoints:
 
-    PATCH /api/v1/samples/{id}/expiration
-    PATCH /api/v1/samples/expiration         (bulk)
-    PATCH /api/v1/samples/{id}/mpp
-    POST  /api/v1/samples/{id}/restore
+    PATCH  /api/v1/samples/{id}/expiration
+    PATCH  /api/v1/samples/expiration         (bulk)
+    PATCH  /api/v1/samples/{id}/mpp
+    POST   /api/v1/samples/{id}/restore
+    GET    /api/v1/samples/{id}/tags
+    POST   /api/v1/samples/{id}/tags
+    DELETE /api/v1/samples/{id}/tags
 
 The expiration modes are mutually exclusive — the SDK validates this client-
 side so misuse raises a clear `ValueError` before the round-trip.
@@ -16,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from math import isfinite
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from ._http import HttpSession
@@ -166,6 +169,67 @@ class Samples:
         `set_expiration`.
         """
         return self._http.request_json("POST", f"/samples/{sample_id}/restore")
+
+    def list_tags(self, sample_id: str) -> list[dict[str, Any]]:
+        """List a sample's tags, sorted alphabetically.
+
+        Args:
+            sample_id: UUID of the sample.
+
+        Returns:
+            A list of `{"tag": ..., "createdAt": ...}` entries. Empty if the
+            sample has no tags.
+        """
+        payload = self._http.request_json("GET", f"/samples/{sample_id}/tags")
+        return cast("list[dict[str, Any]]", payload.get("tags", []))
+
+    def add_tag(self, sample_id: str, tag: str) -> dict[str, Any]:
+        """Attach a free-form, org-scoped tag to a sample.
+
+        Tags are cohort/site/status labels — the same ones the dashboard
+        shows. They are normalized server-side (trimmed and lowercased), so
+        `"HistoWiz"` and `"histowiz"` are the same tag.
+
+        Idempotent: re-adding a tag the sample already has succeeds and
+        returns `created=False` rather than raising, so a re-run of a
+        pipeline doesn't need to special-case it.
+
+        Args:
+            sample_id: UUID of the sample.
+            tag: Label to apply. At most 50 characters once normalized, and
+                may not contain a comma (the samples list uses commas as its
+                filter delimiter).
+
+        Returns:
+            `{"tag": ..., "createdAt": ..., "created": bool}`.
+
+        Raises:
+            NotFoundError: No such sample in this API key's organization.
+            StrandError: The tag failed validation (HTTP 422), or is one
+                Strand administers and clients may not set (HTTP 403). The
+                client does not map either status to a narrower class.
+        """
+        return self._http.request_json(
+            "POST", f"/samples/{sample_id}/tags", json={"tag": tag}
+        )
+
+    def remove_tag(self, sample_id: str, tag: str) -> bool:
+        """Remove a tag from a sample.
+
+        Removing a tag that isn't present is not an error — the return value
+        distinguishes the two cases.
+
+        Args:
+            sample_id: UUID of the sample.
+            tag: Label to remove. Normalized the same way as on write.
+
+        Returns:
+            True if a tag was removed, False if it wasn't there.
+        """
+        payload = self._http.request_json(
+            "DELETE", f"/samples/{sample_id}/tags", params={"tag": tag}
+        )
+        return bool(payload.get("removed", False))
 
 
 def _validate_mpp(value: float, name: str) -> float:

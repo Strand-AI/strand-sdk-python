@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Release notes on GitHub are extracted from the section header matching the
 published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
+## [0.10.0] - 2026-07-31
+
+### Added
+
+- Added `client.samples.list_tags(...)`, `client.samples.add_tag(...)`, and
+  `client.samples.remove_tag(...)` for free-form, org-scoped sample tags —
+  the same labels the dashboard shows. Previously tags were reachable only
+  through the session-authed dashboard, so API-key clients could not label a
+  cohort. `add_tag` is idempotent and `remove_tag` reports whether a tag was
+  actually present.
+
 ## [0.9.0] - 2026-07-31
 
 Reading a Lattice result worked on neither documented path before this release.
