@@ -102,13 +102,27 @@ class Upload:
         )
 
     def _with_completion(self, raw: dict[str, Any]) -> Upload:
+        """Fold a POST /uploads/{id}/complete response into this Upload.
+
+        Slide dimensions are *not* part of this response. Completion now only
+        hands the sample to de-identification — the WSI is still in the
+        quarantine bucket, and level-0 dimensions are read later, off the
+        de-identified copy, before the sample reaches `ready`. So `widthPx` /
+        `heightPx` are absent here and stay None until a subsequent
+        `uploads.get(...)`.
+
+        Everything is read defensively: a completion that raced ahead of us
+        (`skipped: true`) echoes only `uploadId` and `status`.
+        """
         return Upload(
             id=self.id,
             upload_url=self.upload_url,
             gcs_path=self.gcs_path,
-            width_px=int(raw["widthPx"]),
-            height_px=int(raw["heightPx"]),
-            status=str(raw["status"]),
+            filename=self.filename,
+            file_size=self.file_size,
+            width_px=int(raw["widthPx"]) if isinstance(raw.get("widthPx"), int) else None,
+            height_px=int(raw["heightPx"]) if isinstance(raw.get("heightPx"), int) else None,
+            status=str(raw["status"]) if raw.get("status") is not None else None,
         )
 
 

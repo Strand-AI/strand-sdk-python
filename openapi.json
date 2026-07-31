@@ -71,11 +71,10 @@
       },
       "UploadComplete": {
         "type": "object",
+        "description": "Completion hands the sample to de-identification; it does not return slide dimensions. The WSI is still in the quarantine bucket at this point, and level-0 dimensions are read later off the de-identified copy, before the sample reaches `ready`. Poll `GET /uploads/{id}` for `widthPx` / `heightPx`.",
         "required": [
           "uploadId",
-          "status",
-          "widthPx",
-          "heightPx"
+          "status"
         ],
         "properties": {
           "uploadId": {
@@ -84,22 +83,15 @@
           },
           "status": {
             "type": "string",
-            "enum": [
-              "ready"
-            ]
+            "description": "Sample status after the call — normally `deid_running`, or `deid_failed` if the de-identification job could not be scheduled. A duplicate call echoes whatever status the sample already had."
           },
-          "widthPx": {
-            "type": "integer"
+          "skipped": {
+            "type": "boolean",
+            "description": "True when the sample had already moved past `uploading`, so this call was a no-op. Completion is idempotent."
           },
-          "heightPx": {
-            "type": "integer"
-          },
-          "dimensionsSource": {
+          "warning": {
             "type": "string",
-            "enum": [
-              "sharp",
-              "stub"
-            ]
+            "description": "Present when the upload landed but de-identification could not be queued."
           }
         }
       },
@@ -126,7 +118,7 @@
           },
           "status": {
             "type": "string",
-            "description": "uploading | preprocessing | ready | preprocess_failed"
+            "description": "uploading | deid_running | deid_failed | preprocessing | ready | preprocess_failed"
           },
           "gcsPath": {
             "type": "string"

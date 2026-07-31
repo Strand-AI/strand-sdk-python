@@ -364,3 +364,89 @@ def test_get_upload_unknown_raises_not_found(client: strand.Client) -> None:
     )
     with pytest.raises(strand.NotFoundError):
         client.uploads.get(upload_id)
+
+
+# --- completion response shapes actually served in production -----------------
+#
+# Completion hands the sample to de-identification and returns no slide
+# dimensions; they are read later off the de-identified copy. The tests above
+# all mock a `widthPx`-bearing body, which is why `int(raw["widthPx"])` in
+# `_with_completion` went unnoticed until a real upload raised KeyError.
+
+
+def _mock_upload_flow(upload_id: str, gcs_upload_url: str, complete_body: dict) -> None:
+    """Wire the three calls upload_file makes, with a caller-supplied completion."""
+    respx.post(f"{API_ROOT}/uploads").mock(
+        return_value=Response(
+            200,
+            json={
+                "uploadId": upload_id,
+                "uploadUrl": gcs_upload_url,
+                "gcsPath": f"uploads/org/{upload_id}/slide.svs",
+                "existing": False,
+            },
+        )
+    )
+    respx.put(gcs_upload_url).mock(return_value=Response(200))
+    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
+        return_value=Response(200, json=complete_body)
+    )
+
+
+@respx.mock
+def test_complete_without_dimensions(client, tmp_path) -> None:
+    upload_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    url = "https://storage.googleapis.com/upload/deid-1"
+    blob = tmp_path / "slide.svs"
+    blob.write_bytes(b"x" * 512)
+
+    _mock_upload_flow(upload_id, url, {"uploadId": upload_id, "status": "deid_running"})
+
+    upload = client.uploads.upload_file(blob)
+
+    assert upload.id == upload_id
+    assert upload.status == "deid_running"
+    # Not an error, and not zero — genuinely not known yet.
+    assert upload.width_px is None
+    assert upload.height_px is None
+
+
+@respx.mock
+def test_complete_is_idempotent_and_echoes_current_status(client, tmp_path) -> None:
+    # A duplicate completion returns `skipped: true` with whatever status the
+    # sample already had, and no dimensions.
+    upload_id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+    url = "https://storage.googleapis.com/upload/deid-2"
+    blob = tmp_path / "slide.svs"
+    blob.write_bytes(b"x" * 512)
+
+    _mock_upload_flow(
+        upload_id, url, {"uploadId": upload_id, "status": "preprocessing", "skipped": True}
+    )
+
+    upload = client.uploads.upload_file(blob)
+
+    assert upload.status == "preprocessing"
+    assert upload.width_px is None
+
+
+@respx.mock
+def test_complete_surfaces_deid_scheduling_failure(client, tmp_path) -> None:
+    upload_id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+    url = "https://storage.googleapis.com/upload/deid-3"
+    blob = tmp_path / "slide.svs"
+    blob.write_bytes(b"x" * 512)
+
+    _mock_upload_flow(
+        upload_id,
+        url,
+        {
+            "uploadId": upload_id,
+            "status": "deid_failed",
+            "warning": "Upload succeeded but de-identification could not be scheduled.",
+        },
+    )
+
+    # The SDK does not raise here — the caller inspects status and decides.
+    upload = client.uploads.upload_file(blob)
+    assert upload.status == "deid_failed"
