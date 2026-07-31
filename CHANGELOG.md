@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Release notes on GitHub are extracted from the section header matching the
 published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
+## [0.7.0] - 2026-07-30
+
+### Added
+
+- Added `client.samples.set_mpp(...)` for user-reported physical pixel-size
+  overrides before inference.
+- Added `Job.request_ome_tiff_export()`, `Job.get_ome_tiff_export()`, and
+  `Job.export_ome_tiff(...)` for asynchronous OME-TIFF export and download.
+
 ## [0.6.0] - 2026-07-30
 
 ### Changed
