@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Release notes on GitHub are extracted from the section header matching the
 published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
+## [0.8.0] - 2026-07-31
+
+### Fixed
+
+- `uploads.upload_file(...)` raised `KeyError: 'widthPx'` on every successful
+  upload. Completion hands the sample to de-identification and does not return
+  slide dimensions — those are read later, off the de-identified copy. The
+  client now reads the completion response defensively; `width_px` /
+  `height_px` stay `None` until a subsequent `uploads.get(...)`.
+
 ## [0.7.0] - 2026-07-30
 
 ### Added
