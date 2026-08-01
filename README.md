@@ -13,11 +13,20 @@ pip install "strand-sdk[anndata]"
 ```
 
 If your environment can't reach PyPI, you can install directly from the
-repository as a fallback:
+mirror repository as a fallback:
 
 ```bash
 pip install "git+https://github.com/Strand-AI/strand-sdk-python.git"
 ```
+
+> **`Strand-AI/strand-sdk-python` is a generated, read-only mirror.** The source
+> of truth is `sdks/python/strand-sdk/` in Strand's `strand-official` monorepo;
+> the `SDK Mirror` workflow force-pushes each change onto the mirror's `main`.
+> Installing from it (above) is supported. Developing in it is not — any commit
+> or PR landed on the mirror is destroyed by the next sync, and a version there
+> that lags PyPI just means the mirror hasn't synced or your clone is stale.
+> Strand engineers: make changes in the monorepo and follow
+> `sdks/CONTRIBUTING.md`.
 
 ## Quickstart
 
@@ -279,12 +288,20 @@ pnpm openapi:check
 
 ## Development
 
+Work in the monorepo copy at `sdks/python/strand-sdk/`, not in the mirror — see
+the note at the top of this README.
+
 ```bash
 uv sync --all-extras
 uv run pytest
 uv run ruff check src tests
 uv run mypy src
 ```
+
+Releasing: bump `version` in `pyproject.toml`, add the matching `## [X.Y.Z]`
+section to `CHANGELOG.md`, and merge to `main`. The `SDKs Publish` workflow
+detects the version diff and uploads to PyPI; no tag or manual upload is
+involved. Full checklist in `sdks/CONTRIBUTING.md`.
 
 ## Issues & contributing
 
