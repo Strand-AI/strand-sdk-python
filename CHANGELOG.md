@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Release notes on GitHub are extracted from the section header matching the
 published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
+## [0.9.0] - 2026-07-31
+
+Reading a Lattice result worked on neither documented path before this release.
+`0.8.0` is reserved for the in-review upload-contract change (#523); this
+release sits on top of it.
+
+### Fixed
+
+- `to_array()` / `to_anndata()` now decode the zarr v3 `sharding_indexed`
+  codec with zstd-compressed inner chunks — the layout the platform has
+  actually written since marker pyramids moved to shards. Previously every
+  real result raised `StrandError: Unsupported codec in zarr`.
+- `download_to()` no longer aborts when the result manifest declares a pyramid
+  level that storage doesn't hold. The store is treated as authoritative: the
+  absent dataset is dropped from the mirrored `zarr.json` (so the local copy
+  stays a valid, openable zarr store) and a `UserWarning` names it. This makes
+  results written before the platform-side manifest fix readable as-is.
+- Absent chunk/shard objects are read as `fill_value` rather than raising,
+  matching zarr semantics.
+
+### Changed
+
+- The `anndata` extra now also installs `zstandard` (on Python < 3.14; 3.14+
+  uses the stdlib `compression.zstd`). Array decoding needs a zstd binding.
 ## [0.8.0] - 2026-07-31
 
 ### Fixed

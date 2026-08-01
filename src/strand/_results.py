@@ -6,23 +6,36 @@ predicted marker), each pointing at its own pyramid:
 
     zarr.json                     root group (omero/multiscales metadata)
     he/{level}/zarr.json          H&E source array per pyramid level
-    he/{level}/c/0/{cr}/{cc}      chunk bytes
+    he/{level}/c/0/{cr}/{cc}      chunk or shard bytes
     markers/{name}/{level}/...    one [1, H, W] array per marker (per level)
 
-Chunks are little-endian raw bytes (codec="bytes" — no compression).
+Storage objects under `c/` are addressed by the array's `chunk_grid`, which for
+current results is the *shard* grid: markers and H&E are written with the zarr
+v3 `sharding_indexed` codec, packing 8x8 inner 256x256 chunks into one object
+(cuts GCS object count ~64x — see `platform/inference/pyramid.py`). Inner chunks
+are individually zstd-compressed. Older results are unsharded raw
+little-endian bytes; both layouts are read here.
 
-The SDK reads zarr directly via numpy — no dependency on zarr-python.
+The SDK decodes zarr directly with numpy — no dependency on zarr-python. That
+keeps the base install to `httpx`, and the store is only reachable through the
+API-key-authenticated proxy at `/api/v1/jobs/{id}/results/files/{path}`, which
+zarr-python could not read without a custom Store implementation anyway.
+Decompression needs a zstd binding: Python 3.14's stdlib `compression.zstd` is
+used when available, otherwise the `zstandard` package (pulled in by the
+`anndata` extra alongside numpy).
 """
 
 from __future__ import annotations
 
+import copy
 import json
+import warnings
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from ._errors import StrandError
+from ._errors import NotFoundError, StrandError
 
 if TYPE_CHECKING:
     from ._client import Client
@@ -38,6 +51,9 @@ _DTYPE_BYTES = {
     "float32": 4,
     "float64": 8,
 }
+
+#: zarr v3 sharding "inner chunk not present" sentinel: offset == nbytes == 2**64 - 1.
+_SHARD_EMPTY = (1 << 64) - 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,27 +155,57 @@ class JobResults:
 
         Walks every multiscale's every level and copies the bytes locally.
         Returns the `target` path.
+
+        The store, not the manifest, is authoritative. A dataset the root
+        manifest declares but storage doesn't hold is dropped from the local
+        copy's `zarr.json` and a `UserWarning` names it, so the mirror stays a
+        valid zarr store that `zarr.open()` can read. (Results written before
+        the level-count fix over-declare one pyramid level per marker; this is
+        what makes them readable without a backfill.) A chunk object that is
+        absent is left absent — zarr reads missing chunks as `fill_value`.
         """
         out = Path(target)
         out.mkdir(parents=True, exist_ok=True)
 
-        root = self.root_meta()
-        (out / "zarr.json").write_bytes(json.dumps(root).encode("utf-8"))
+        root = copy.deepcopy(self.root_meta())
+        missing: list[str] = []
 
         for ms in _multiscales(root):
+            kept: list[dict[str, Any]] = []
             for dataset in ms.get("datasets") or []:
                 path = dataset.get("path")
                 if not isinstance(path, str):
                     continue
-                array_meta = self.get_json(f"{path}/zarr.json")
+                try:
+                    array_meta = self.get_json(f"{path}/zarr.json")
+                except NotFoundError:
+                    missing.append(path)
+                    continue
+                kept.append(dataset)
                 dest = out / path
                 dest.mkdir(parents=True, exist_ok=True)
                 (dest / "zarr.json").write_bytes(json.dumps(array_meta).encode("utf-8"))
                 for chunk_path in _enumerate_chunks(array_meta):
                     file_path = f"{path}/{chunk_path}"
+                    try:
+                        data = self.get_bytes(file_path)
+                    except NotFoundError:
+                        # Absent chunk/shard object == every element is fill_value.
+                        continue
                     full = out / file_path
                     full.parent.mkdir(parents=True, exist_ok=True)
-                    full.write_bytes(self.get_bytes(file_path))
+                    full.write_bytes(data)
+            ms["datasets"] = kept
+
+        (out / "zarr.json").write_bytes(json.dumps(root).encode("utf-8"))
+
+        if missing:
+            warnings.warn(
+                "Result manifest declares datasets that are not in storage; "
+                f"omitted from the local copy: {', '.join(missing)}",
+                UserWarning,
+                stacklevel=2,
+            )
         return out
 
     # ---------- per-array decode ----------
@@ -284,53 +330,236 @@ def _multiscales(root_meta: dict[str, Any]) -> list[dict[str, Any]]:
     return [m for m in ms if isinstance(m, dict)]
 
 
+def _zstd_decompress(data: bytes, expected: int) -> bytes:
+    """Inflate one zstd frame whose decompressed size is known to be `expected`.
+
+    Prefers Python 3.14's stdlib binding, then the `zstandard` package. The
+    size is passed explicitly rather than trusting the frame header, which is
+    optional in the zstd format.
+    """
+    try:
+        from compression.zstd import (  # type: ignore[import-not-found]
+            decompress as _stdlib_decompress,
+        )
+    except ImportError:
+        pass
+    else:
+        return cast(bytes, _stdlib_decompress(data))
+
+    try:
+        import zstandard
+    except ImportError as exc:
+        raise StrandError(
+            "Reading results requires a zstd decoder (result chunks are "
+            "zstd-compressed). Install with: pip install 'strand-sdk[anndata]' "
+            "(or 'pip install zstandard').",
+        ) from exc
+    return zstandard.ZstdDecompressor().decompress(data, max_output_size=expected)
+
+
+def _codec_names(codecs: Any) -> list[str]:
+    if not isinstance(codecs, list):
+        return []
+    return [str(c.get("name")) for c in codecs if isinstance(c, dict)]
+
+
+def _bytes_codec_ok(codecs: Any) -> bool:
+    """True when `codecs[0]` is a little-endian `bytes` codec."""
+    if not isinstance(codecs, list) or not codecs or not isinstance(codecs[0], dict):
+        return False
+    if codecs[0].get("name") != "bytes":
+        return False
+    cfg = codecs[0].get("configuration") or {}
+    return bool(cfg.get("endian", "little") == "little")
+
+
+def _payload_uses_zstd(codecs: Any, where: str) -> bool:
+    """Validate a `[bytes]` / `[bytes, zstd]` codec chain; return whether zstd is on."""
+    names = _codec_names(codecs)
+    if _bytes_codec_ok(codecs):
+        if names == ["bytes"]:
+            return False
+        if names == ["bytes", "zstd"]:
+            return True
+    raise StrandError(
+        f"Unsupported {where} codec chain {codecs!r}; the SDK reads "
+        "['bytes'] and ['bytes', 'zstd'].",
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _Sharding:
+    """Parsed `sharding_indexed` configuration for one array."""
+
+    inner_chunk: tuple[int, int, int]
+    #: inner chunks per shard, per axis — e.g. `(1, 8, 8)`.
+    per_shard: tuple[int, int, int]
+    payload_zstd: bool
+    index_location: str
+    #: Bytes the index occupies in the shard, including any checksum.
+    index_nbytes: int
+    slots: int
+
+
+def _parse_sharding(codec: dict[str, Any], shard_shape: list[int]) -> _Sharding:
+    cfg = codec.get("configuration") or {}
+    inner = cfg.get("chunk_shape")
+    if not isinstance(inner, list) or len(inner) != len(shard_shape):
+        raise StrandError(f"Bad sharding_indexed chunk_shape {inner!r}")
+    inner_t = tuple(int(v) for v in inner)
+    per_shard = tuple(-(-int(s) // int(i)) for s, i in zip(shard_shape, inner_t, strict=True))
+    if per_shard[0] != 1:
+        raise StrandError(
+            "SDK expects all channels in a single inner chunk along C; "
+            f"got inner chunk {inner_t} in shard {shard_shape}.",
+        )
+
+    payload_zstd = _payload_uses_zstd(cfg.get("codecs"), "sharding payload")
+
+    index_codecs = cfg.get("index_codecs")
+    index_names = _codec_names(index_codecs)
+    if not _bytes_codec_ok(index_codecs) or index_names not in (["bytes"], ["bytes", "crc32c"]):
+        raise StrandError(
+            f"Unsupported shard index codec chain {index_codecs!r}; the SDK reads "
+            "['bytes'] and ['bytes', 'crc32c'].",
+        )
+
+    slots = per_shard[0] * per_shard[1] * per_shard[2]
+    # 16 bytes per slot (offset u64 LE + nbytes u64 LE), plus crc32c's trailing
+    # u32 when declared. The checksum is skipped, not verified — the transport
+    # is HTTPS and verifying would cost a dependency for no added integrity.
+    index_nbytes = slots * 16 + (4 if index_names == ["bytes", "crc32c"] else 0)
+    location = cfg.get("index_location", "end")
+    if location not in ("start", "end"):
+        raise StrandError(f"Unsupported shard index_location {location!r}")
+
+    return _Sharding(
+        inner_chunk=cast(tuple[int, int, int], inner_t),
+        per_shard=cast(tuple[int, int, int], per_shard),
+        payload_zstd=payload_zstd,
+        index_location=location,
+        index_nbytes=index_nbytes,
+        slots=slots,
+    )
+
+
+def _shard_index(raw: bytes, sharding: _Sharding, key: str) -> list[tuple[int, int]]:
+    """Slice a shard's index out of the shard blob → one `(offset, nbytes)` per slot."""
+    if len(raw) < sharding.index_nbytes:
+        raise StrandError(
+            f"Shard {key} is {len(raw)} bytes; too short for a "
+            f"{sharding.index_nbytes}-byte index",
+        )
+    body = (
+        raw[: sharding.index_nbytes]
+        if sharding.index_location == "start"
+        else raw[len(raw) - sharding.index_nbytes :]
+    )
+    return [
+        (
+            int.from_bytes(body[i * 16 : i * 16 + 8], "little"),
+            int.from_bytes(body[i * 16 + 8 : i * 16 + 16], "little"),
+        )
+        for i in range(sharding.slots)
+    ]
+
+
 def _read_array(meta: dict[str, Any], fetch_chunk: Any, np: Any) -> Any:
-    shape = list(meta["shape"])
-    chunk_shape = list(meta["chunk_grid"]["configuration"]["chunk_shape"])
+    """Decode one zarr v3 array into a numpy `[C, H, W]`.
+
+    `fetch_chunk(key)` returns the bytes of the storage object at `key`
+    (e.g. `"c/0/3/4"`) or raises `NotFoundError` when it is absent — an absent
+    object means every element it covers is `fill_value`.
+    """
+    shape = [int(v) for v in meta["shape"]]
+    grid_chunk = [int(v) for v in meta["chunk_grid"]["configuration"]["chunk_shape"]]
     dtype_name = str(meta["data_type"])
     if dtype_name not in _DTYPE_BYTES:
         raise StrandError(f"Unsupported dtype in zarr: {dtype_name!r}")
-    codecs = meta.get("codecs", [])
-    if any(c.get("name") not in {"bytes"} for c in codecs):
-        raise StrandError(
-            f"Unsupported codec in zarr (only 'bytes' is supported): {codecs!r}"
-        )
     if len(shape) != 3:
         raise StrandError(f"Expected 3-dim [C, H, W] array, got shape {shape}")
 
+    codecs = meta.get("codecs") or []
+    sharding: _Sharding | None = None
+    shard_codec = next(
+        (c for c in codecs if isinstance(c, dict) and c.get("name") == "sharding_indexed"),
+        None,
+    )
+    if shard_codec is not None:
+        if len(codecs) != 1:
+            raise StrandError(
+                f"Unsupported codec chain around sharding_indexed: {codecs!r}",
+            )
+        sharding = _parse_sharding(shard_codec, grid_chunk)
+        payload_zstd = sharding.payload_zstd
+        inner = list(sharding.inner_chunk)
+    else:
+        payload_zstd = _payload_uses_zstd(codecs, "array")
+        inner = grid_chunk
+
     c_dim, h_dim, w_dim = shape
-    chunk_c, chunk_h, chunk_w = chunk_shape
-    if chunk_c != c_dim:
+    inner_c, inner_h, inner_w = inner
+    if inner_c != c_dim:
         raise StrandError(
             "SDK currently expects all channels in a single chunk along C; "
-            f"got chunks={chunk_shape}, shape={shape}.",
+            f"got chunks={inner}, shape={shape}.",
         )
 
-    rows = -(-h_dim // chunk_h)
-    cols = -(-w_dim // chunk_w)
-    item_bytes = _DTYPE_BYTES[dtype_name]
-    full = np.zeros(shape, dtype=np.dtype(dtype_name))
-    for cr in range(rows):
-        for cc in range(cols):
-            chunk_key = f"c/0/{cr}/{cc}"
-            raw = fetch_chunk(chunk_key)
-            expected = chunk_c * chunk_h * chunk_w * item_bytes
-            if len(raw) != expected:
-                raise StrandError(
-                    f"Chunk {chunk_key} has {len(raw)} bytes; expected {expected}",
-                )
-            buf = np.frombuffer(raw, dtype=np.dtype(dtype_name)).reshape(
-                chunk_c, chunk_h, chunk_w
-            )
-            y0 = cr * chunk_h
-            x0 = cc * chunk_w
-            y1 = min(y0 + chunk_h, h_dim)
-            x1 = min(x0 + chunk_w, w_dim)
+    dtype = np.dtype(dtype_name)
+    inner_bytes = inner_c * inner_h * inner_w * _DTYPE_BYTES[dtype_name]
+    fill = meta.get("fill_value", 0)
+    full = np.full(shape, fill, dtype=dtype)
+
+    def place(cr: int, cc: int, raw: bytes, key: str) -> None:
+        if len(raw) != inner_bytes:
+            raise StrandError(f"Chunk {key} has {len(raw)} bytes; expected {inner_bytes}")
+        buf = np.frombuffer(raw, dtype=dtype).reshape(inner_c, inner_h, inner_w)
+        y0, x0 = cr * inner_h, cc * inner_w
+        y1, x1 = min(y0 + inner_h, h_dim), min(x0 + inner_w, w_dim)
+        if y1 > y0 and x1 > x0:
             full[:, y0:y1, x0:x1] = buf[:, : (y1 - y0), : (x1 - x0)]
+
+    # Storage objects are addressed by the *outer* grid: shards when sharded,
+    # chunks otherwise.
+    grid_h, grid_w = grid_chunk[1], grid_chunk[2]
+    for gr in range(-(-h_dim // grid_h)):
+        for gc in range(-(-w_dim // grid_w)):
+            key = f"c/0/{gr}/{gc}"
+            try:
+                raw = fetch_chunk(key)
+            except NotFoundError:
+                continue
+            if sharding is None:
+                place(gr, gc, _zstd_decompress(raw, inner_bytes) if payload_zstd else raw, key)
+                continue
+            index = _shard_index(raw, sharding, key)
+            for iy in range(sharding.per_shard[1]):
+                for ix in range(sharding.per_shard[2]):
+                    offset, nbytes = index[iy * sharding.per_shard[2] + ix]
+                    if offset == _SHARD_EMPTY or nbytes == _SHARD_EMPTY:
+                        continue
+                    if offset + nbytes > len(raw):
+                        raise StrandError(
+                            f"Shard {key} index points past end of object "
+                            f"({offset}+{nbytes} > {len(raw)})",
+                        )
+                    payload = raw[offset : offset + nbytes]
+                    place(
+                        gr * sharding.per_shard[1] + iy,
+                        gc * sharding.per_shard[2] + ix,
+                        _zstd_decompress(payload, inner_bytes) if payload_zstd else payload,
+                        f"{key}[{iy},{ix}]",
+                    )
     return full
 
 
 def _enumerate_chunks(array_meta: dict[str, Any]) -> Iterable[str]:
+    """Every storage object key under `c/` for one array.
+
+    Driven by `chunk_grid`, which is the *shard* grid on sharded arrays — so
+    this enumerates one key per stored object either way, which is what a
+    byte-for-byte mirror needs.
+    """
     shape = list(array_meta["shape"])
     chunks = list(array_meta["chunk_grid"]["configuration"]["chunk_shape"])
     if len(shape) != len(chunks):

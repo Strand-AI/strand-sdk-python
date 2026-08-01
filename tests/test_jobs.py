@@ -238,15 +238,24 @@ def test_wait_raises_on_failed_status(client: strand.Client) -> None:
     assert exc_info.value.job_id == job_id
 
 
-def _platform_root_meta(markers: list[str]) -> dict:
-    """Match the real platform layout: one multiscale per modality."""
-    multiscales = [
-        {
-            "version": "0.5",
-            "name": "H&E",
-            "datasets": [{"path": "he/0"}],
-        }
-    ]
+def _platform_root_meta(markers: list[str], *, include_he: bool = False) -> dict:
+    """A LEGACY (unsharded, uncompressed) result root.
+
+    Current results are `sharding_indexed` + zstd and their root carries no
+    `H&E` entry — H&E lives on the sample prefix, and postprocess writes markers
+    only. Those shapes are covered in `test_results.py` against metadata
+    captured from production; this helper exists so the older layout keeps
+    working, and it must not be taken as the current contract.
+    """
+    multiscales = []
+    if include_he:
+        multiscales.append(
+            {
+                "version": "0.5",
+                "name": "H&E",
+                "datasets": [{"path": "he/0"}],
+            }
+        )
     for m in markers:
         multiscales.append(
             {
@@ -276,7 +285,7 @@ def _array_meta(shape: list[int], chunk_shape: list[int], dtype: str = "float32"
 
 
 @respx.mock
-def test_download_results_to_disk_walks_zarr_tree(
+def test_download_results_to_disk_walks_legacy_unsharded_zarr_tree(
     client: strand.Client, tmp_path: Path
 ) -> None:
     job_id = "22222222-2222-2222-2222-222222222222"
@@ -293,7 +302,7 @@ def test_download_results_to_disk_walks_zarr_tree(
         )
     )
 
-    root_meta = _platform_root_meta(["CD3"])
+    root_meta = _platform_root_meta(["CD3"], include_he=True)
     he_meta = _array_meta([3, 2, 2], [3, 2, 2], dtype="uint8")
     cd3_meta = _array_meta([1, 2, 2], [1, 2, 2], dtype="float32")
     he_chunk = struct.pack("<12B", *list(range(12)))
@@ -325,7 +334,7 @@ def test_download_results_to_disk_walks_zarr_tree(
 
 
 @respx.mock
-def test_download_results_to_anndata(client: strand.Client) -> None:
+def test_download_results_to_anndata_from_legacy_unsharded_store(client: strand.Client) -> None:
     pytest.importorskip("anndata")
     pytest.importorskip("numpy")
     import numpy as np
@@ -344,7 +353,7 @@ def test_download_results_to_anndata(client: strand.Client) -> None:
         )
     )
 
-    root_meta = _platform_root_meta(["CD3", "CD8"])
+    root_meta = _platform_root_meta(["CD3", "CD8"], include_he=True)
     marker_meta = _array_meta([1, 2, 2], [1, 2, 2])
     he_meta = _array_meta([3, 2, 2], [3, 2, 2], dtype="uint8")
     cd3 = struct.pack("<4f", 1.0, 2.0, 3.0, 4.0)
