@@ -146,6 +146,87 @@ class Estimate:
 
 
 @dataclass(frozen=True, slots=True)
+class Sample:
+    """A sample's curated read model, from `client.samples.get(sample_id)`.
+
+    Expiration is a field group on the sample — `will_expire` is `False` only
+    when the sample never expires (a `custom` pin, or an org with no default
+    policy), in which case `expires_at` and `expires_in_days` are `None`.
+
+    Attributes:
+        id: Sample UUID.
+        name: Human-friendly display name, or `None` if unset.
+        filename: Original uploaded filename.
+        status: Lifecycle status (`uploading`, `preprocessing`, `ready`,
+            `preprocess_failed`).
+        file_size: Uploaded file size in bytes, or `None` if unparseable.
+        width_px: Level-0 width in pixels, or `None` before the dimensions
+            probe completes.
+        height_px: Level-0 height in pixels, or `None`.
+        mpp: Effective microns per pixel as an `(x, y)` tuple, or `None` when
+            the sample has no usable scale yet.
+        tags: The sample's canonical tags, sorted alphabetically.
+        created_at: When the sample was created.
+        expires_at: When the sample moves to Trash, or `None` if it never
+            expires.
+        expires_at_source: `"org_default"`, `"custom"`, or `None`.
+        expires_in_days: Whole days until expiry, clamped at 0 for a sample
+            at/past its date but not yet swept. `None` when it never expires.
+        will_expire: True when the sample has an expiration date set.
+        trashed_at: When the sample entered Trash, or `None` if still active.
+            Trashed samples are permanently deleted 7 days after this time.
+    """
+
+    id: str
+    name: str | None
+    filename: str
+    status: str
+    file_size: int | None
+    width_px: int | None
+    height_px: int | None
+    mpp: tuple[float, float] | None
+    tags: list[str]
+    created_at: datetime | None
+    expires_at: datetime | None
+    expires_at_source: Literal["org_default", "custom"] | None
+    expires_in_days: int | None
+    will_expire: bool
+    trashed_at: datetime | None
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> Sample:
+        size_raw = raw.get("fileSize")
+        try:
+            file_size = int(size_raw) if size_raw is not None else None
+        except (TypeError, ValueError):
+            file_size = None
+        mpp_raw = raw.get("mpp")
+        mpp = (
+            (float(mpp_raw["x"]), float(mpp_raw["y"]))
+            if isinstance(mpp_raw, dict) and "x" in mpp_raw and "y" in mpp_raw
+            else None
+        )
+        days_raw = raw.get("expiresInDays")
+        return cls(
+            id=str(raw["id"]),
+            name=raw.get("name"),
+            filename=str(raw["filename"]),
+            status=str(raw["status"]),
+            file_size=file_size,
+            width_px=raw["widthPx"] if isinstance(raw.get("widthPx"), int) else None,
+            height_px=raw["heightPx"] if isinstance(raw.get("heightPx"), int) else None,
+            mpp=mpp,
+            tags=[str(t) for t in raw.get("tags", [])],
+            created_at=_parse_dt(raw.get("createdAt")),
+            expires_at=_parse_dt(raw.get("expiresAt")),
+            expires_at_source=raw.get("expiresAtSource"),
+            expires_in_days=int(days_raw) if isinstance(days_raw, int) else None,
+            will_expire=bool(raw.get("willExpire")),
+            trashed_at=_parse_dt(raw.get("trashedAt")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class JobStatus:
     """A point-in-time snapshot of job state."""
 

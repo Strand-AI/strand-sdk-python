@@ -21,6 +21,8 @@ from datetime import UTC, datetime
 from math import isfinite
 from typing import TYPE_CHECKING, Any, cast
 
+from ._models import Sample
+
 if TYPE_CHECKING:
     from ._http import HttpSession
 
@@ -96,6 +98,28 @@ class Samples:
         else:
             mpp = {"x": x, "y": _validate_mpp(mpp_y, "mpp_y")}
         return self._http.request_json("PATCH", f"/samples/{sample_id}/mpp", json={"mpp": mpp})
+
+    def get(self, sample_id: str) -> Sample:
+        """Fetch a sample's curated resource.
+
+        Returns the sample's identity, status, physical scale, tags, and its
+        current expiration as one typed model — the read-only way to check
+        when a sample expires (via `.will_expire` / `.expires_in_days` /
+        `.expires_at`) before it moves to Trash, without the mutation that
+        `set_expiration` requires. Any API key whose org owns the sample can
+        read it.
+
+        Args:
+            sample_id: UUID of the sample.
+
+        Returns:
+            A `Sample` with parsed `created_at` / `expires_at` datetimes.
+
+        Raises:
+            NotFoundError: No such sample in this API key's organization.
+        """
+        payload = self._http.request_json("GET", f"/samples/{sample_id}")
+        return Sample._from_dict(payload)
 
     def set_expiration(
         self,

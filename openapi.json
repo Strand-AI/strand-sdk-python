@@ -462,6 +462,120 @@
           }
         }
       },
+      "SampleResource": {
+        "type": "object",
+        "description": "A sample's curated read model, returned by `GET /samples/{id}`. Expiration is a field group on it: `willExpire` is false only when the sample never expires (a `custom` pin, or an org with no default policy), in which case `expiresAt` and `expiresInDays` are null.",
+        "required": [
+          "id",
+          "name",
+          "filename",
+          "status",
+          "fileSize",
+          "widthPx",
+          "heightPx",
+          "mpp",
+          "tags",
+          "createdAt",
+          "expiresAt",
+          "expiresAtSource",
+          "expiresInDays",
+          "willExpire",
+          "trashedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "description": "Human-friendly display name, or null if unset (falls back to filename)."
+          },
+          "filename": {
+            "type": "string",
+            "description": "Original uploaded filename."
+          },
+          "status": {
+            "type": "string",
+            "description": "Lifecycle status: `uploading`, `preprocessing`, `ready`, or `preprocess_failed`."
+          },
+          "fileSize": {
+            "type": "string",
+            "description": "Uploaded file size in bytes (string-encoded 64-bit integer)."
+          },
+          "widthPx": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Level-0 width in pixels, or null before the dimensions probe completes."
+          },
+          "heightPx": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Level-0 height in pixels, or null before the dimensions probe completes."
+          },
+          "mpp": {
+            "type": "object",
+            "nullable": true,
+            "required": [
+              "x",
+              "y"
+            ],
+            "description": "Effective microns per pixel (user override → calibrated slide tag → legacy), or null when the sample has no usable scale yet.",
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              }
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The sample's canonical tag strings, sorted alphabetically."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the sample moves to Trash. Null when it never expires."
+          },
+          "expiresAtSource": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "org_default",
+              "custom",
+              null
+            ],
+            "description": "`org_default` = derived from the org policy at upload time. `custom` = set by an explicit expiration call (a date or a never-expire pin). Null when the sample has no expiration and no org policy applies."
+          },
+          "expiresInDays": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Whole days until expiry, clamped at 0 for a sample at/past its date but not yet swept. Null when the sample never expires."
+          },
+          "willExpire": {
+            "type": "boolean",
+            "description": "True when the sample has an expiration date set."
+          },
+          "trashedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the sample entered Trash, or null if it is still active. Trashed samples are permanently deleted 7 days after this time."
+          }
+        }
+      },
       "SampleTag": {
         "type": "object",
         "properties": {
@@ -1106,6 +1220,55 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OmeTiffExport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/samples/{id}": {
+      "get": {
+        "summary": "Get a sample",
+        "description": "Read a single sample's curated resource — identity, status, physical scale, tags, and its current expiration (including the read-only `expiresInDays` / `willExpire` projections). Any API key whose org owns the sample can read it.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sample resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SampleResource"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sample not found in this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }

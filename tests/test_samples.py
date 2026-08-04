@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from datetime import UTC, datetime
 
 import pytest
 import respx
@@ -44,6 +45,100 @@ def test_set_mpp_sends_both_axes(client: strand.Client, api_root: str) -> None:
 def test_set_mpp_rejects_invalid_values(client: strand.Client, value: object) -> None:
     with pytest.raises(ValueError, match="greater than 0 and at most 100"):
         client.samples.set_mpp("sample-1", value)  # type: ignore[arg-type]
+
+
+@respx.mock
+def test_get_parses_the_full_sample_resource(client: strand.Client, api_root: str) -> None:
+    route = respx.get(f"{api_root}/samples/sample-1").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "sample-1",
+                "name": "Slide A",
+                "filename": "slide-a.svs",
+                "status": "ready",
+                "fileSize": "1048576",
+                "widthPx": 20000,
+                "heightPx": 15000,
+                "mpp": {"x": 0.5, "y": 0.5},
+                "tags": ["cohort-a", "histowiz"],
+                "createdAt": "2026-01-15T12:00:00Z",
+                "expiresAt": "2026-12-31T00:00:00Z",
+                "expiresAtSource": "custom",
+                "expiresInDays": 120,
+                "willExpire": True,
+                "trashedAt": None,
+            },
+        )
+    )
+
+    result = client.samples.get("sample-1")
+
+    assert route.calls.last.request.method == "GET"
+    assert result == strand.Sample(
+        id="sample-1",
+        name="Slide A",
+        filename="slide-a.svs",
+        status="ready",
+        file_size=1048576,
+        width_px=20000,
+        height_px=15000,
+        mpp=(0.5, 0.5),
+        tags=["cohort-a", "histowiz"],
+        created_at=datetime(2026, 1, 15, 12, tzinfo=UTC),
+        expires_at=datetime(2026, 12, 31, tzinfo=UTC),
+        expires_at_source="custom",
+        expires_in_days=120,
+        will_expire=True,
+        trashed_at=None,
+    )
+
+
+@respx.mock
+def test_get_handles_never_expire_no_scale_no_tags(
+    client: strand.Client, api_root: str
+) -> None:
+    respx.get(f"{api_root}/samples/sample-1").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "sample-1",
+                "name": None,
+                "filename": "slide-b.svs",
+                "status": "uploading",
+                "fileSize": "2048",
+                "widthPx": None,
+                "heightPx": None,
+                "mpp": None,
+                "tags": [],
+                "createdAt": "2026-01-16T12:00:00Z",
+                "expiresAt": None,
+                "expiresAtSource": None,
+                "expiresInDays": None,
+                "willExpire": False,
+                "trashedAt": None,
+            },
+        )
+    )
+
+    result = client.samples.get("sample-1")
+
+    assert result.name is None
+    assert result.mpp is None
+    assert result.width_px is None
+    assert result.tags == []
+    assert result.will_expire is False
+    assert result.expires_in_days is None
+
+
+@respx.mock
+def test_get_raises_not_found_outside_org(client: strand.Client, api_root: str) -> None:
+    respx.get(f"{api_root}/samples/sample-1").mock(
+        return_value=Response(404, json={"error": "not_found", "message": "Sample not found"})
+    )
+
+    with pytest.raises(strand.NotFoundError):
+        client.samples.get("sample-1")
 
 
 @respx.mock

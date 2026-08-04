@@ -40,7 +40,7 @@ from ._errors import (
     UploadError,
 )
 from ._jobs import Job, JobEvent
-from ._models import Estimate, JobStatus, OmeTiffExport, PredictResult, Upload
+from ._models import Estimate, JobStatus, OmeTiffExport, PredictResult, Sample, Upload
 from ._predict import ModelId
 from ._results import JobResults
 from ._uploads import UploadList
@@ -62,6 +62,7 @@ __all__ = [
     "OmeTiffExport",
     "PredictResult",
     "RateLimitError",
+    "Sample",
     "StrandError",
     "UnknownMarkerError",
     "Upload",

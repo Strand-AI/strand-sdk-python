@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Release notes on GitHub are extracted from the section header matching the
 published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
+## [0.11.0] - 2026-08-04
+
+### Added
+
+- Added `client.samples.get(sample_id)`, the first sample-read endpoint. It
+  returns a typed `Sample` (identity, status, physical scale, tags, and the
+  expiration field group) so callers can check when a sample expires — via
+  `.will_expire`, `.expires_in_days`, and the parsed `.expires_at` datetime —
+  without the mutation that `set_expiration` requires. Previously there was no
+  way to read a sample's expiration over the API without changing it.
+
 ## [0.10.0] - 2026-07-31
 
 ### Added
