@@ -391,7 +391,7 @@
                 }
               }
             ],
-            "description": "User-reported microns per pixel. Use a number for isotropic pixels or provide both x and y axes."
+            "description": "User-reported microns per pixel. Slides are isotropic: pass a number, or an { x, y } object whose axes are equal (anisotropic input is rejected)."
           }
         }
       },
@@ -399,27 +399,16 @@
         "type": "object",
         "required": [
           "id",
-          "userMpp"
+          "mpp"
         ],
         "properties": {
           "id": {
             "type": "string",
             "format": "uuid"
           },
-          "userMpp": {
-            "type": "object",
-            "required": [
-              "x",
-              "y"
-            ],
-            "properties": {
-              "x": {
-                "type": "number"
-              },
-              "y": {
-                "type": "number"
-              }
-            }
+          "mpp": {
+            "type": "number",
+            "description": "The persisted isotropic microns-per-pixel override."
           }
         }
       },
@@ -515,21 +504,9 @@
             "description": "Level-0 height in pixels, or null before the dimensions probe completes."
           },
           "mpp": {
-            "type": "object",
+            "type": "number",
             "nullable": true,
-            "required": [
-              "x",
-              "y"
-            ],
-            "description": "Effective microns per pixel (user override → calibrated slide tag → legacy), or null when the sample has no usable scale yet.",
-            "properties": {
-              "x": {
-                "type": "number"
-              },
-              "y": {
-                "type": "number"
-              }
-            }
+            "description": "Effective isotropic microns per pixel (user override → calibrated slide value), or null when the sample has no usable scale yet."
           },
           "tags": {
             "type": "array",

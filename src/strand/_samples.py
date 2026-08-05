@@ -72,32 +72,22 @@ class Samples:
     def __init__(self, http: HttpSession) -> None:
         self._http = http
 
-    def set_mpp(
-        self,
-        sample_id: str,
-        mpp_x: float,
-        mpp_y: float | None = None,
-    ) -> dict[str, Any]:
+    def set_mpp(self, sample_id: str, mpp: float) -> dict[str, Any]:
         """Set the user-reported physical pixel size for a sample.
 
         The value is measured in microns per pixel at the slide's base level.
-        It takes precedence over embedded slide metadata for subsequent
-        inference jobs. Omit `mpp_y` for isotropic pixels.
+        Slides are isotropic: a single value governs both axes. It takes
+        precedence over embedded slide metadata for subsequent inference jobs.
 
         Args:
             sample_id: UUID of the sample or completed upload.
-            mpp_x: Horizontal microns per pixel, greater than 0 and at most 100.
-            mpp_y: Optional vertical microns per pixel. Defaults to `mpp_x`.
+            mpp: Microns per pixel, greater than 0 and at most 100.
 
         Returns:
-            Server payload with `id` and normalized `userMpp.{x,y}` values.
+            Server payload with `id` and the persisted scalar `mpp`.
         """
-        x = _validate_mpp(mpp_x, "mpp_x")
-        if mpp_y is None:
-            mpp: float | dict[str, float] = x
-        else:
-            mpp = {"x": x, "y": _validate_mpp(mpp_y, "mpp_y")}
-        return self._http.request_json("PATCH", f"/samples/{sample_id}/mpp", json={"mpp": mpp})
+        value = _validate_mpp(mpp, "mpp")
+        return self._http.request_json("PATCH", f"/samples/{sample_id}/mpp", json={"mpp": value})
 
     def get(self, sample_id: str) -> Sample:
         """Fetch a sample's curated resource.

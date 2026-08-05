@@ -163,8 +163,8 @@ class Sample:
         width_px: Level-0 width in pixels, or `None` before the dimensions
             probe completes.
         height_px: Level-0 height in pixels, or `None`.
-        mpp: Effective microns per pixel as an `(x, y)` tuple, or `None` when
-            the sample has no usable scale yet.
+        mpp: Effective microns per pixel (a single isotropic value), or `None`
+            when the sample has no usable scale yet.
         tags: The sample's canonical tags, sorted alphabetically.
         created_at: When the sample was created.
         expires_at: When the sample moves to Trash, or `None` if it never
@@ -184,7 +184,7 @@ class Sample:
     file_size: int | None
     width_px: int | None
     height_px: int | None
-    mpp: tuple[float, float] | None
+    mpp: float | None
     tags: list[str]
     created_at: datetime | None
     expires_at: datetime | None
@@ -201,11 +201,7 @@ class Sample:
         except (TypeError, ValueError):
             file_size = None
         mpp_raw = raw.get("mpp")
-        mpp = (
-            (float(mpp_raw["x"]), float(mpp_raw["y"]))
-            if isinstance(mpp_raw, dict) and "x" in mpp_raw and "y" in mpp_raw
-            else None
-        )
+        mpp = float(mpp_raw) if isinstance(mpp_raw, (int, float)) else None
         days_raw = raw.get("expiresInDays")
         return cls(
             id=str(raw["id"]),

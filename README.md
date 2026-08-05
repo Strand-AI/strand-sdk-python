@@ -109,12 +109,11 @@ dispatchable).
 ### Setting slide scale
 
 If a slide's physical pixel size is missing or incorrect, set the base-level
-microns per pixel before submitting a job. Omit the third argument for
-isotropic pixels:
+microns per pixel before submitting a job. Slides are isotropic, so a single
+value governs both axes:
 
 ```python
 client.samples.set_mpp(upload.id, 0.26)
-client.samples.set_mpp(upload.id, 0.26, 0.25)  # separate x/y values
 ```
 
 The user-reported value takes precedence over embedded slide metadata for
