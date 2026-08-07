@@ -56,6 +56,19 @@ packages = ["src/strand"]
 [tool.hatch.build.targets.sdist]
 include = ["src/strand", "README.md", "LICENSE"]
 
+# Refuse any package version published in the last 7 days. Rolling-window parity
+# with the npm `pnpm.minimumReleaseAge=10080` (10080 min = 7 days) defense in
+# platform/package.json against fresh-malware drops (e.g. the Shai-Hulud npm
+# worm). `P7D` makes uv recompute `now - 7d` on every resolve. This is a library
+# (uv.lock is .gitignored, CI runs `uv sync` without --frozen), so the cooldown
+# is enforced fresh on every install — genuinely rolling, no bump automation.
+# required-version is FAIL-CLOSED: an older uv silently ignores the P7D
+# duration (parse-warns, exits 0) and resolves UNCOOLED, so refuse to run on
+# uv < 0.12 (the version CI's setup-uv installs). True floor is 0.9.17.
+[tool.uv]
+required-version = ">=0.12"
+exclude-newer = 'P7D'
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
