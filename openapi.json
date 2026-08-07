@@ -135,6 +135,10 @@
           "heightPx": {
             "type": "integer",
             "nullable": true
+          },
+          "autoSegment": {
+            "type": "boolean",
+            "description": "Resolved auto-segmentation decision for this upload (per-upload override, else org default, else true)."
           }
         }
       },
@@ -654,6 +658,10 @@
                     "type": "string",
                     "pattern": "^[0-9a-f]{64}$",
                     "description": "Optional client-computed SHA-256. On a match within the calling organization, the response returns the existing upload and skips byte transfer."
+                  },
+                  "autoSegment": {
+                    "type": "boolean",
+                    "description": "Opt out of automatic cell segmentation for this upload. Defaults to the organization's `autoSegmentDefault` (true unless changed). When false, the slide is ingested and rendered but no segmentation job runs; marker runs still work but without cell-level readouts until segmented."
                   }
                 }
               }

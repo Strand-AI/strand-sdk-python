@@ -125,6 +125,7 @@ class Uploads:
         chunk_size: int = CHUNK_SIZE,
         progress: ProgressCb | None = None,
         if_not_exists: bool = False,
+        auto_segment: bool | None = None,
     ) -> Upload:
         """Upload a local WSI file end-to-end.
 
@@ -143,6 +144,10 @@ class Uploads:
                 and ask the server to dedup against existing non-archived samples
                 with the same content hash. On a hit, the byte upload is skipped
                 and the existing `Upload` is returned. Defaults to False.
+            auto_segment: Opt out of automatic cell segmentation for this upload.
+                `None` (default) uses the org's default; `False` skips segmentation
+                (the slide is still ingested and rendered); `True` forces it on even
+                when the org default is off.
 
         Returns:
             `Upload` with `width_px` / `height_px` / `status="ready"` populated.
@@ -167,7 +172,7 @@ class Uploads:
 
         content_sha256 = _sha256_of_file(local) if if_not_exists else None
 
-        session, existing = self._initiate(local.name, size, ct, content_sha256)
+        session, existing = self._initiate(local.name, size, ct, content_sha256, auto_segment)
         if existing:
             # Server confirmed a non-archived row already holds this content
             # hash — skip the byte upload entirely and surface the existing
@@ -190,6 +195,7 @@ class Uploads:
         size: int,
         content_type: str,
         content_sha256: str | None,
+        auto_segment: bool | None = None,
     ) -> tuple[Upload, bool]:
         body: dict[str, Any] = {
             "filename": filename,
@@ -198,6 +204,8 @@ class Uploads:
         }
         if content_sha256 is not None:
             body["contentSha256"] = content_sha256
+        if auto_segment is not None:
+            body["autoSegment"] = auto_segment
         raw = self._http.request_json("POST", "/uploads", json=body)
         existing = bool(raw.get("existing"))
         if existing:

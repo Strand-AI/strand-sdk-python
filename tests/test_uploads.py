@@ -355,6 +355,97 @@ def test_upload_without_if_not_exists_omits_hash(
 
 
 @respx.mock
+def test_upload_omits_auto_segment_when_not_set(
+    client: strand.Client, tmp_path: Path
+) -> None:
+    """Default: no `autoSegment` key on the init body (org default applies)."""
+    blob = tmp_path / "slide.svs"
+    blob.write_bytes(b"z" * (256 * 1024))
+    upload_id = "77777777-7777-4777-8777-777777777777"
+    gcs_upload_url = "https://storage.googleapis.com/test/resumable?upload_id=as0"
+
+    init_bodies: list[bytes] = []
+
+    def _init(request):
+        init_bodies.append(request.read())
+        return Response(
+            200,
+            json={"uploadId": upload_id, "uploadUrl": gcs_upload_url, "gcsPath": "p"},
+        )
+
+    respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
+    respx.put(gcs_upload_url).mock(return_value=Response(200))
+    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
+        return_value=Response(200, json={"uploadId": upload_id, "status": "preprocessing"})
+    )
+
+    client.uploads.upload_file(blob)
+
+    import json
+
+    body = json.loads(init_bodies[0])
+    assert "autoSegment" not in body
+
+
+@respx.mock
+@pytest.mark.parametrize("value", [True, False])
+def test_upload_forwards_auto_segment(
+    client: strand.Client, tmp_path: Path, value: bool
+) -> None:
+    """`auto_segment=True/False` is posted as `autoSegment` on the init body."""
+    blob = tmp_path / "slide.svs"
+    blob.write_bytes(b"z" * (256 * 1024))
+    upload_id = "88888888-8888-4888-8888-888888888888"
+    gcs_upload_url = "https://storage.googleapis.com/test/resumable?upload_id=as1"
+
+    init_bodies: list[bytes] = []
+
+    def _init(request):
+        init_bodies.append(request.read())
+        return Response(
+            200,
+            json={"uploadId": upload_id, "uploadUrl": gcs_upload_url, "gcsPath": "p"},
+        )
+
+    respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
+    respx.put(gcs_upload_url).mock(return_value=Response(200))
+    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
+        return_value=Response(200, json={"uploadId": upload_id, "status": "preprocessing"})
+    )
+
+    client.uploads.upload_file(blob, auto_segment=value)
+
+    import json
+
+    body = json.loads(init_bodies[0])
+    assert body["autoSegment"] is value
+
+
+@respx.mock
+def test_get_upload_surfaces_auto_segment(client: strand.Client) -> None:
+    """`Upload.auto_segment` is hydrated from the row when present."""
+    upload_id = "99999999-9999-4999-8999-999999999999"
+    respx.get(f"{API_ROOT}/uploads/{upload_id}").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": upload_id,
+                "filename": "b.svs",
+                "fileSize": "2048",
+                "status": "ready",
+                "gcsPath": f"uploads/org/{upload_id}/b.svs",
+                "createdAt": "2026-08-06T11:00:00Z",
+                "widthPx": 100,
+                "heightPx": 80,
+                "autoSegment": False,
+            },
+        )
+    )
+    u = client.uploads.get(upload_id)
+    assert u.auto_segment is False
+
+
+@respx.mock
 def test_get_upload_unknown_raises_not_found(client: strand.Client) -> None:
     upload_id = "33333333-3333-4333-8333-333333333333"
     respx.get(f"{API_ROOT}/uploads/{upload_id}").mock(

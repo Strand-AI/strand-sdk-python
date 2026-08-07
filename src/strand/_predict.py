@@ -119,6 +119,7 @@ class Predict:
         output_dir: str | os.PathLike[str] | None = ...,
         poll_interval_sec: float = ...,
         on_progress: ProgressCb | None = ...,
+        auto_segment: bool | None = ...,
     ) -> PredictResult: ...
 
     @overload
@@ -133,6 +134,7 @@ class Predict:
         output_dir: str | os.PathLike[str] | None = ...,
         poll_interval_sec: float = ...,
         on_progress: ProgressCb | None = ...,
+        auto_segment: bool | None = ...,
     ) -> Job: ...
 
     def __call__(
@@ -146,6 +148,7 @@ class Predict:
         output_dir: str | os.PathLike[str] | None = None,
         poll_interval_sec: float = 5.0,
         on_progress: ProgressCb | None = None,
+        auto_segment: bool | None = None,
     ) -> PredictResult | Job:
         """Run the full prediction pipeline in one call.
 
@@ -157,6 +160,10 @@ class Predict:
             image_path: Local WSI file to upload (SVS / TIFF / NDPI / …).
             markers: Markers to predict (e.g., `["HER2", "CD8", "PD1"]`).
             model: Optional explicit model id. See `predict.submit(...)`.
+            auto_segment: Opt out of automatic cell segmentation for the uploaded
+                slide. `None` (default) uses the org default; `False` skips
+                segmentation; `True` forces it on. Ignored on a dedup hit against
+                an already-uploaded slide (the earlier decision stands).
             wait: When `True` (default), block through upload → submit → wait
                 → download and return a `PredictResult`. When `False`, return
                 a `Job` handle once the upload + submit complete — caller
@@ -210,7 +217,10 @@ class Predict:
         # Without this, a repeat `predict(same_file, ...)` re-uploads + races
         # the still-preprocessing original on submit(). See task #95.
         upload = self._client.uploads.upload_file(
-            local_path, progress=_upload_progress, if_not_exists=True
+            local_path,
+            progress=_upload_progress,
+            if_not_exists=True,
+            auto_segment=auto_segment,
         )
         report("upload", 1.0)
 

@@ -73,6 +73,10 @@ class Upload:
     filename: str | None = None
     file_size: int | None = None
     created_at: datetime | None = None
+    # Resolved auto-segmentation decision for this upload (per-upload override,
+    # else org default, else true). None for freshly-initiated sessions until
+    # the row is fetched via list/get.
+    auto_segment: bool | None = None
 
     @classmethod
     def _from_create(cls, raw: dict[str, Any]) -> Upload:
@@ -98,6 +102,7 @@ class Upload:
             status=str(raw["status"]) if raw.get("status") is not None else None,
             width_px=int(raw["widthPx"]) if isinstance(raw.get("widthPx"), int) else None,
             height_px=int(raw["heightPx"]) if isinstance(raw.get("heightPx"), int) else None,
+            auto_segment=raw["autoSegment"] if isinstance(raw.get("autoSegment"), bool) else None,
             created_at=_parse_dt(raw.get("createdAt")),
         )
 
@@ -123,6 +128,7 @@ class Upload:
             width_px=int(raw["widthPx"]) if isinstance(raw.get("widthPx"), int) else None,
             height_px=int(raw["heightPx"]) if isinstance(raw.get("heightPx"), int) else None,
             status=str(raw["status"]) if raw.get("status") is not None else None,
+            auto_segment=self.auto_segment,
         )
 
 

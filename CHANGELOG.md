@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Release notes on GitHub are extracted from the section header matching the
 published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
+## [0.12.0] - 2026-08-06
+
+### Added
+
+- Added an `auto_segment` parameter to `client.uploads.upload_file(...)` and
+  `client.predict(...)`. Cell segmentation still runs on ingest by default;
+  pass `auto_segment=False` to skip it for that upload (the slide is still
+  ingested and rendered), or `True` to force it even when the org default is
+  off. `None` (the default) defers to the org's default. The resolved decision
+  is surfaced on `Upload.auto_segment` from `uploads.get(...)` / `.list()`.
+
 ## [0.11.0] - 2026-08-04
 
 ### Added
