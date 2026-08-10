@@ -23,6 +23,7 @@ import httpx
 
 from ._errors import UploadError
 from ._models import Upload
+from ._samples import _validate_mpp
 
 if TYPE_CHECKING:
     from ._http import HttpSession
@@ -56,6 +57,26 @@ ProgressCb = Callable[[int, int], None]
 # Read size for streaming sha256. Bigger than CHUNK_SIZE is fine — we're not
 # bound by GCS multiples here; 1 MiB is a good cache-friendly value.
 _HASH_READ_SIZE = 1024 * 1024
+
+
+def _normalize_mpp(mpp: float | tuple[float, float] | None) -> float | None:
+    """Collapse user-reported MPP to the isotropic scalar the API expects.
+
+    Slides are isotropic — an ``(x, y)`` tuple is accepted for callers whose
+    metadata carries per-axis values, but the axes must be equal. Bounds
+    (> 0, <= 100 µm/px) mirror the server's canonical validator.
+    """
+    if mpp is None:
+        return None
+    if isinstance(mpp, tuple):
+        if len(mpp) != 2:
+            raise ValueError("mpp tuple must be (x, y)")
+        x = _validate_mpp(mpp[0], "mpp[0]")
+        y = _validate_mpp(mpp[1], "mpp[1]")
+        if x != y:
+            raise ValueError("Slides are isotropic: mpp x and y must be equal")
+        return x
+    return _validate_mpp(mpp, "mpp")
 
 
 def _sha256_of_file(path: Path) -> str:
@@ -126,6 +147,7 @@ class Uploads:
         progress: ProgressCb | None = None,
         if_not_exists: bool = False,
         auto_segment: bool | None = None,
+        mpp: float | tuple[float, float] | None = None,
     ) -> Upload:
         """Upload a local WSI file end-to-end.
 
@@ -148,6 +170,14 @@ class Uploads:
                 `None` (default) uses the org's default; `False` skips segmentation
                 (the slide is still ingested and rendered); `True` forces it on even
                 when the org default is off.
+            mpp: User-reported microns per pixel, for callers that already know
+                their slide's scale. Persisted on the sample at creation and takes
+                precedence over the slide's own calibrated value, so the sample is
+                predict-ready as soon as preprocessing finishes — no follow-up
+                `samples.set_mpp(...)` needed. Slides are isotropic: pass a float,
+                or an `(x, y)` tuple whose values are equal. Must be > 0 and
+                <= 100. Ignored on an `if_not_exists` dedup hit (the existing
+                sample's scale stands).
 
         Returns:
             `Upload` with `width_px` / `height_px` / `status="ready"` populated.
@@ -170,9 +200,12 @@ class Uploads:
         size = local.stat().st_size
         ct = content_type or _CONTENT_TYPE_BY_EXT.get(local.suffix.lower(), DEFAULT_CONTENT_TYPE)
 
+        mpp_value = _normalize_mpp(mpp)
         content_sha256 = _sha256_of_file(local) if if_not_exists else None
 
-        session, existing = self._initiate(local.name, size, ct, content_sha256, auto_segment)
+        session, existing = self._initiate(
+            local.name, size, ct, content_sha256, auto_segment, mpp_value
+        )
         if existing:
             # Server confirmed a non-archived row already holds this content
             # hash — skip the byte upload entirely and surface the existing
@@ -196,6 +229,7 @@ class Uploads:
         content_type: str,
         content_sha256: str | None,
         auto_segment: bool | None = None,
+        mpp: float | None = None,
     ) -> tuple[Upload, bool]:
         body: dict[str, Any] = {
             "filename": filename,
@@ -206,6 +240,8 @@ class Uploads:
             body["contentSha256"] = content_sha256
         if auto_segment is not None:
             body["autoSegment"] = auto_segment
+        if mpp is not None:
+            body["mpp"] = mpp
         raw = self._http.request_json("POST", "/uploads", json=body)
         existing = bool(raw.get("existing"))
         if existing:

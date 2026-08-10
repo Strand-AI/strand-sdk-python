@@ -422,6 +422,89 @@ def test_upload_forwards_auto_segment(
 
 
 @respx.mock
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(0.2634, 0.2634), ((0.5, 0.5), 0.5)],
+)
+def test_upload_forwards_mpp_as_isotropic_scalar(
+    client: strand.Client, tmp_path: Path, value, expected: float
+) -> None:
+    """`mpp=` (float or equal-axes tuple) is posted as a scalar on the init body."""
+    blob = tmp_path / "slide.svs"
+    blob.write_bytes(b"z" * (256 * 1024))
+    upload_id = "99999999-9999-4999-8999-999999999999"
+    gcs_upload_url = "https://storage.googleapis.com/test/resumable?upload_id=mpp1"
+
+    init_bodies: list[bytes] = []
+
+    def _init(request):
+        init_bodies.append(request.read())
+        return Response(
+            200,
+            json={"uploadId": upload_id, "uploadUrl": gcs_upload_url, "gcsPath": "p"},
+        )
+
+    respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
+    respx.put(gcs_upload_url).mock(return_value=Response(200))
+    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
+        return_value=Response(200, json={"uploadId": upload_id, "status": "preprocessing"})
+    )
+
+    client.uploads.upload_file(blob, mpp=value)
+
+    import json
+
+    body = json.loads(init_bodies[0])
+    assert body["mpp"] == expected
+
+
+@respx.mock
+def test_upload_omits_mpp_when_not_set(client: strand.Client, tmp_path: Path) -> None:
+    """Default: no `mpp` key on the init body (slide's own calibration applies)."""
+    blob = tmp_path / "slide.svs"
+    blob.write_bytes(b"z" * (256 * 1024))
+    upload_id = "99999999-9999-4999-8999-999999999998"
+    gcs_upload_url = "https://storage.googleapis.com/test/resumable?upload_id=mpp0"
+
+    init_bodies: list[bytes] = []
+
+    def _init(request):
+        init_bodies.append(request.read())
+        return Response(
+            200,
+            json={"uploadId": upload_id, "uploadUrl": gcs_upload_url, "gcsPath": "p"},
+        )
+
+    respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
+    respx.put(gcs_upload_url).mock(return_value=Response(200))
+    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
+        return_value=Response(200, json={"uploadId": upload_id, "status": "preprocessing"})
+    )
+
+    client.uploads.upload_file(blob)
+
+    import json
+
+    body = json.loads(init_bodies[0])
+    assert "mpp" not in body
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [0, -0.25, 101, float("nan"), (0.26, 0.25), (0.25,), (0, 0.25)],
+)
+def test_upload_rejects_invalid_mpp_before_any_io(
+    client: strand.Client, tmp_path: Path, bad
+) -> None:
+    """Zero/negative/over-ceiling/anisotropic mpp raises before bytes move."""
+    blob = tmp_path / "slide.svs"
+    blob.write_bytes(b"z" * (256 * 1024))
+
+    with pytest.raises(ValueError):
+        client.uploads.upload_file(blob, mpp=bad)
+
+
+@respx.mock
 def test_get_upload_surfaces_auto_segment(client: strand.Client) -> None:
     """`Upload.auto_segment` is hydrated from the row when present."""
     upload_id = "99999999-9999-4999-8999-999999999999"

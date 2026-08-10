@@ -120,6 +120,7 @@ class Predict:
         poll_interval_sec: float = ...,
         on_progress: ProgressCb | None = ...,
         auto_segment: bool | None = ...,
+        mpp: float | tuple[float, float] | None = ...,
     ) -> PredictResult: ...
 
     @overload
@@ -135,6 +136,7 @@ class Predict:
         poll_interval_sec: float = ...,
         on_progress: ProgressCb | None = ...,
         auto_segment: bool | None = ...,
+        mpp: float | tuple[float, float] | None = ...,
     ) -> Job: ...
 
     def __call__(
@@ -149,6 +151,7 @@ class Predict:
         poll_interval_sec: float = 5.0,
         on_progress: ProgressCb | None = None,
         auto_segment: bool | None = None,
+        mpp: float | tuple[float, float] | None = None,
     ) -> PredictResult | Job:
         """Run the full prediction pipeline in one call.
 
@@ -164,6 +167,12 @@ class Predict:
                 slide. `None` (default) uses the org default; `False` skips
                 segmentation; `True` forces it on. Ignored on a dedup hit against
                 an already-uploaded slide (the earlier decision stands).
+            mpp: User-reported microns per pixel for the uploaded slide, when the
+                caller already knows its scale. Persisted at creation and wins
+                over the slide's own calibrated value — no separate
+                `samples.set_mpp(...)` call needed. Isotropic: a float, or an
+                `(x, y)` tuple with equal axes; > 0 and <= 100. Ignored on a
+                dedup hit (the existing sample's scale stands).
             wait: When `True` (default), block through upload → submit → wait
                 → download and return a `PredictResult`. When `False`, return
                 a `Job` handle once the upload + submit complete — caller
@@ -221,6 +230,7 @@ class Predict:
             progress=_upload_progress,
             if_not_exists=True,
             auto_segment=auto_segment,
+            mpp=mpp,
         )
         report("upload", 1.0)
 

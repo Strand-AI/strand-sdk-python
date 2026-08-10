@@ -689,6 +689,42 @@ def test_predict_sends_content_sha256_for_dedup(
 
 
 @respx.mock
+def test_predict_threads_mpp_to_upload_init(
+    client: strand.Client, tmp_path: Path
+) -> None:
+    """`predict(..., mpp=...)` posts the scale on the upload-init body, so the
+    one-shot pipeline needs no wait-for-ready → set_mpp step."""
+    blob = tmp_path / "slide.svs"
+    blob.write_bytes(b"x" * (256 * 1024))
+
+    init_bodies: list[bytes] = []
+
+    def _init(request):
+        init_bodies.append(request.read())
+        return Response(
+            200,
+            json={
+                "uploadId": UPLOAD_ID,
+                "uploadUrl": GCS_URL,
+                "gcsPath": f"uploads/org/{UPLOAD_ID}/slide.svs",
+                "existing": False,
+            },
+        )
+
+    _mock_full_pipeline(["CD3"])
+    # Re-mock /uploads now that _mock_full_pipeline replaced it with a
+    # version that doesn't capture bodies.
+    respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
+
+    client.predict(
+        blob, markers=["CD3"], mpp=0.2634, poll_interval_sec=0.05, timeout_sec=10
+    )
+
+    body = json.loads(init_bodies[0])
+    assert body["mpp"] == 0.2634
+
+
+@respx.mock
 def test_predict_skips_reupload_on_dedup_hit(
     client: strand.Client, tmp_path: Path
 ) -> None:

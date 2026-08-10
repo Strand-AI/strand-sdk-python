@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Release notes on GitHub are extracted from the section header matching the
 published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
+## [0.13.0] - 2026-08-10
+
+### Added
+
+- Added an `mpp` parameter to `client.uploads.upload_file(...)` and
+  `client.predict(...)` for callers that already know their slide's
+  microns-per-pixel. The value is posted on the upload-init body and persisted
+  on the sample at creation, where it takes precedence over the slide's own
+  calibrated scale — so `upload(mpp=...) → submit` just works, with no
+  wait-for-ready → `samples.set_mpp(...)` step. Slides are isotropic: pass a
+  float, or an `(x, y)` tuple with equal axes (> 0, <= 100). Ignored on an
+  `if_not_exists` dedup hit (the existing sample's scale stands).
+  `samples.set_mpp(...)` remains available for correcting a slide after upload.
+
 ## [0.12.0] - 2026-08-06
 
 ### Added

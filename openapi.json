@@ -662,6 +662,35 @@
                   "autoSegment": {
                     "type": "boolean",
                     "description": "Opt out of automatic cell segmentation for this upload. Defaults to the organization's `autoSegmentDefault` (true unless changed). When false, the slide is ingested and rendered but no segmentation job runs; marker runs still work but without cell-level readouts until segmented."
+                  },
+                  "mpp": {
+                    "oneOf": [
+                      {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "maximum": 100
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "x",
+                          "y"
+                        ],
+                        "properties": {
+                          "x": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "maximum": 100
+                          },
+                          "y": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "maximum": 100
+                          }
+                        }
+                      }
+                    ],
+                    "description": "Optional user-reported microns per pixel, for callers that already know their slide's scale. Slides are isotropic: pass a number, or an { x, y } object whose axes are equal (anisotropic input is rejected). Persisted on the sample at creation and takes precedence over the slide's own calibrated value, so `POST /predict` works as soon as preprocessing finishes — no follow-up `PATCH /samples/{id}/mpp` needed. Ignored when `contentSha256` deduplicates to an existing sample (that sample's scale stands)."
                   }
                 }
               }
