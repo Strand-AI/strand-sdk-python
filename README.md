@@ -44,11 +44,15 @@ result = client.predict(
 print(f"Used {result.credits_used} credits; wrote {len(result.marker_outputs)} markers")
 ```
 
+Resource servers acting for a user can pass a short-lived Strand OAuth token
+instead: `Client(access_token=token)`. An explicit access token takes precedence
+over API-key arguments and `STRAND_API_KEY`.
+
 `client.predict(...)` returns a `PredictResult` with `job_id`, `status`,
 `credits_used`, `marker_outputs` (paths under `output_dir`), and `results`
 (a `JobResults` handle for selective reads). It raises `JobFailedError` if the
 job fails, `JobTimeoutError` if the deadline elapses, and surfaces
-`InsufficientCreditsError` / `RateLimitError` on submit issues.
+`InsufficientCreditsError` when the org balance cannot reserve the run.
 
 Pass `on_progress=lambda stage, frac: ...` to follow the four stages
 (`"upload"`, `"submit"`, `"wait"`, `"download"`). `frac` is always a float
@@ -262,7 +266,7 @@ Pages are newest-first and stable under inserts. Pass the response's
 |---|---|---|
 | Env | `STRAND_API_KEY` | required |
 | Env | `STRAND_BASE_URL` | `https://app.strandai.com` |
-| Arg | `Client(api_key=..., base_url=..., timeout=..., max_retries=...)` | — |
+| Arg | `Client(api_key=..., access_token=..., base_url=..., timeout=..., max_retries=...)` | — |
 
 ## Layout
 

@@ -25,6 +25,33 @@ def test_client_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @respx.mock
+def test_oauth_access_token_takes_precedence_over_api_key() -> None:
+    route = respx.post(f"{API_ROOT}/predict/estimate").mock(
+        return_value=Response(
+            200,
+            json={
+                "patchCount": 1,
+                "markerCount": 1,
+                "estimatedCredits": 1,
+                "orgBalance": 1,
+                "orgPending": 0,
+            },
+        )
+    )
+    client = strand.Client(
+        access_token="oauth-access-token",
+        api_key=API_KEY,
+        base_url=BASE_URL,
+    )
+    try:
+        client.predict.estimate("u", markers=["CD3"])
+    finally:
+        client.close()
+
+    assert route.calls.last.request.headers["authorization"] == "Bearer oauth-access-token"
+
+
+@respx.mock
 def test_estimate_happy_path(client: strand.Client, api_root: str) -> None:
     respx.post(f"{api_root}/predict/estimate").mock(
         return_value=Response(
@@ -88,22 +115,6 @@ def test_402_insufficient_credits_maps_to_typed_exception(
     assert err.required == 1000
     assert err.message == "Need 1000 credits"
     assert err.status_code == 402
-
-
-@respx.mock
-def test_429_rate_limit_carries_retry_after(client: strand.Client, api_root: str) -> None:
-    respx.post(f"{api_root}/predict").mock(
-        return_value=Response(
-            429,
-            json={"error": "rate_limited", "message": "Concurrent cap exceeded"},
-            headers={"Retry-After": "30"},
-        )
-    )
-
-    with pytest.raises(strand.RateLimitError) as exc_info:
-        client.predict.submit("u", markers=["CD3"])
-
-    assert exc_info.value.retry_after == 30
 
 
 @respx.mock

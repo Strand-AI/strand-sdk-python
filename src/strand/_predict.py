@@ -85,7 +85,6 @@ class Predict:
 
         Raises:
             InsufficientCreditsError: 402 — not enough credits to reserve.
-            RateLimitError: 429 — per-org concurrent job cap exceeded.
             NotFoundError: 404 — upload not found in the calling org.
             BadRequestError: 400 — unknown model id (or other validation).
         """
@@ -200,8 +199,8 @@ class Predict:
             FileNotFoundError: If `image_path` doesn't exist.
             JobTimeoutError: If the job hasn't finished within `timeout_sec`.
             JobFailedError: If the job terminates in `"failed"` state.
-            InsufficientCreditsError, RateLimitError, NotFoundError: Per-step
-                from the underlying primitives.
+            InsufficientCreditsError, NotFoundError: Per-step from the
+                underlying primitives.
 
         Errors raised after the upload step succeeds carry the resulting
         `upload_id` on `StrandError.upload_id`, so callers can resume via

@@ -26,6 +26,10 @@ published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
 ### Added
 
+- `Client(access_token=...)` can authenticate with a short-lived Strand OAuth
+  bearer token. An explicit OAuth token takes precedence over API-key settings,
+  allowing the remote MCP resource server to forward the consenting user's
+  identity without a platform service credential.
 - Added an `auto_segment` parameter to `client.uploads.upload_file(...)` and
   `client.predict(...)`. Cell segmentation still runs on ingest by default;
   pass `auto_segment=False` to skip it for that upload (the slide is still

@@ -307,6 +307,51 @@ class OmeTiffExport:
 
 
 @dataclass(frozen=True, slots=True)
+class ResultArchiveExport:
+    """Point-in-time status for a whole-result OME-Zarr ZIP export."""
+
+    status: Literal["pending", "running", "ready", "failed"]
+    format: Literal["ome-zarr-zip"]
+    size_bytes: int | None
+    download_url: str | None
+    download_url_expires_at: datetime | None
+    error: str | None
+    updated_at: datetime | None
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> ResultArchiveExport:
+        size_raw = raw.get("sizeBytes")
+        return cls(
+            status=str(raw["status"]),  # type: ignore[arg-type]
+            format=str(raw["format"]),  # type: ignore[arg-type]
+            size_bytes=int(size_raw) if isinstance(size_raw, int) else None,
+            download_url=(
+                str(raw["downloadUrl"]) if raw.get("downloadUrl") is not None else None
+            ),
+            download_url_expires_at=_parse_dt(raw.get("downloadUrlExpiresAt")),
+            error=str(raw["error"]) if raw.get("error") is not None else None,
+            updated_at=_parse_dt(raw.get("updatedAt")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class UploadHandoff:
+    """Secure browser URL for uploading one local slide to an OAuth-bound org."""
+
+    handoff_url: str
+    expires_at: datetime | None
+    instructions: str
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> UploadHandoff:
+        return cls(
+            handoff_url=str(raw["handoffUrl"]),
+            expires_at=_parse_dt(raw.get("expiresAt")),
+            instructions=str(raw["instructions"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class PredictResult:
     """Outcome of a one-shot `client.predict(...)` call.
 

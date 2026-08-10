@@ -46,6 +46,7 @@ class Client:
     """Strand Platform API client.
 
     Args:
+        access_token: OAuth access token. Takes precedence over ``api_key``.
         api_key: API key (`sk-strand-...`). Falls back to `STRAND_API_KEY` env var.
         base_url: API base URL. Defaults to `STRAND_BASE_URL` env var, else
             `https://app.strandai.com`. Should not include the `/api/v1` suffix.
@@ -77,13 +78,18 @@ class Client:
     def __init__(
         self,
         *,
+        access_token: str | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
         timeout: float | httpx.Timeout | None = DEFAULT_TIMEOUT,
         http_client: httpx.Client | None = None,
     ) -> None:
         self._http = HttpSession(
-            api_key=api_key, base_url=base_url, timeout=timeout, client=http_client
+            access_token=access_token,
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+            client=http_client,
         )
         self.uploads = Uploads(self._http)
         self.predict = Predict(self._http, self)

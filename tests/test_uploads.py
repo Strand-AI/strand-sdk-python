@@ -14,6 +14,27 @@ from tests.conftest import API_ROOT
 
 
 @respx.mock
+def test_create_upload_handoff(client: strand.Client) -> None:
+    route = respx.post(f"{API_ROOT}/mcp/upload-handoffs").mock(
+        return_value=Response(
+            200,
+            json={
+                "handoffUrl": "https://app.strandai.com/mcp/upload#token=secret",
+                "expiresAt": "2026-08-07T10:00:00Z",
+                "instructions": "Open the page and choose a slide.",
+            },
+        )
+    )
+
+    handoff = client.uploads.create_handoff(filename_hint="slide.svs")
+
+    assert route.called
+    assert route.calls[0].request.content == b'{"filenameHint":"slide.svs"}'
+    assert handoff.handoff_url.endswith("/mcp/upload#token=secret")
+    assert handoff.expires_at is not None
+
+
+@respx.mock
 def test_upload_file_chunks_and_finalizes(
     client: strand.Client, tmp_path: Path
 ) -> None:

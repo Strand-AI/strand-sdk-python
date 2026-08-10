@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from ._errors import UploadError
-from ._models import Upload
+from ._models import Upload, UploadHandoff
 from ._samples import _validate_mpp
 
 if TYPE_CHECKING:
@@ -137,6 +137,20 @@ class Uploads:
         """
         raw = self._http.request_json("GET", f"/uploads/{upload_id}")
         return Upload._from_row(raw)
+
+    def create_handoff(self, *, filename_hint: str | None = None) -> UploadHandoff:
+        """Create an OAuth-bound browser handoff for one local slide.
+
+        Remote services cannot read a path on the user's computer. This method
+        returns a single-use Strand URL where the connected user signs in and
+        selects the file; the browser then uploads directly to GCS.
+
+        Requires an OAuth access token with ``samples:write``. API keys are
+        intentionally rejected because a handoff must bind to a real user.
+        """
+        body = {"filenameHint": filename_hint} if filename_hint else {}
+        raw = self._http.request_json("POST", "/mcp/upload-handoffs", json=body)
+        return UploadHandoff._from_dict(raw)
 
     def upload_file(
         self,

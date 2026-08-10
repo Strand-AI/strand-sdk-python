@@ -3,7 +3,7 @@
   "info": {
     "title": "Strand AI Platform API",
     "version": "v1",
-    "description": "REST surface for uploading WSIs, submitting Lattice inference jobs, and streaming results. All endpoints require an `Authorization: Bearer sk-strand-...` header. Generate keys at `/settings/api-keys`."
+    "description": "REST surface for uploading WSIs, submitting Lattice inference jobs, and streaming results. All endpoints require an API key or Strand OAuth access token in the `Authorization: Bearer` header."
   },
   "servers": [
     {
@@ -14,6 +14,9 @@
   "security": [
     {
       "ApiKey": []
+    },
+    {
+      "OAuth2": []
     }
   ],
   "components": {
@@ -22,6 +25,24 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "sk-strand-XXXXXXXXXXXXXXXXXXXXXXXX"
+      },
+      "OAuth2": {
+        "type": "oauth2",
+        "description": "Strand authorization-code flow with S256 PKCE, explicit organization consent, and RFC 8707 resource binding.",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://auth.strandai.com/oauth2/auth",
+            "tokenUrl": "https://auth.strandai.com/oauth2/token",
+            "scopes": {
+              "samples:read": "Read slide metadata and estimates",
+              "samples:write": "Upload and change slides",
+              "jobs:read": "Read run status",
+              "jobs:write": "Start, export, or cancel runs",
+              "results:read": "Read and download results",
+              "credits:spend": "Reserve and spend organization credits"
+            }
+          }
+        }
       }
     },
     "schemas": {
@@ -338,6 +359,76 @@
             "type": "string",
             "format": "date-time",
             "nullable": true
+          }
+        }
+      },
+      "ResultArchiveExport": {
+        "type": "object",
+        "required": [
+          "status",
+          "format",
+          "sizeBytes",
+          "updatedAt"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "ready",
+              "failed"
+            ]
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "ome-zarr-zip"
+            ]
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "nullable": true
+          },
+          "downloadUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "One-hour signed download URL. Present only when status is `ready`."
+          },
+          "downloadUrlExpiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Signed URL expiry. Present only when status is `ready`."
+          },
+          "error": {
+            "type": "string",
+            "description": "Present only when status is `failed`."
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "UploadHandoff": {
+        "type": "object",
+        "required": [
+          "handoffUrl",
+          "expiresAt",
+          "instructions"
+        ],
+        "properties": {
+          "handoffUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "instructions": {
+            "type": "string"
           }
         }
       },
@@ -759,6 +850,77 @@
         }
       }
     },
+    "/mcp/upload-handoffs": {
+      "post": {
+        "summary": "Create a secure browser slide-upload handoff",
+        "description": "OAuth only. Creates a single-use, expiring browser URL bound to the token's user and selected organization. The browser streams the chosen WSI directly to GCS; bytes do not pass through the MCP resource server.",
+        "security": [
+          {
+            "OAuth2": [
+              "samples:write"
+            ]
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "filenameHint": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Upload handoff created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadHandoff"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid OAuth token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API keys cannot create browser handoffs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/uploads/{id}/complete": {
       "post": {
         "summary": "Finalize a resumable upload",
@@ -855,7 +1017,7 @@
     "/predict": {
       "post": {
         "summary": "Submit a prediction",
-        "description": "Reserves credits atomically and enqueues preprocessing. Returns 202 + `jobId`. On insufficient balance returns 402 with rollback. On per-org concurrency cap returns 429 with `Retry-After`.",
+        "description": "Reserves credits atomically and enqueues preprocessing. Returns 202 + `jobId`. On insufficient balance returns 402 with rollback.",
         "requestBody": {
           "required": true,
           "content": {
@@ -922,24 +1084,6 @@
                 }
               }
             }
-          },
-          "429": {
-            "description": "Per-org concurrent job cap exceeded",
-            "headers": {
-              "Retry-After": {
-                "schema": {
-                  "type": "integer"
-                },
-                "description": "Seconds to wait before retrying"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
           }
         }
       }
@@ -985,7 +1129,7 @@
     "/jobs/{id}/cancel": {
       "post": {
         "summary": "Cancel an in-flight job",
-        "description": "Atomically flips `status` to `cancelled`, refunds the credit reservation, and releases the per-org slot. Returns 400 if the job is already terminal (`completed`, `failed`, or `cancelled`).",
+        "description": "Atomically flips `status` to `cancelled` and refunds the credit reservation. Returns 400 if the job is already terminal (`completed`, `failed`, or `cancelled`).",
         "parameters": [
           {
             "name": "id",
@@ -1234,6 +1378,132 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OmeTiffExport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/{id}/exports/ome-zarr-zip": {
+      "post": {
+        "summary": "Request a whole-result OME-Zarr ZIP export",
+        "description": "Starts or reuses a cached ZIP archive of the completed job's OME-Zarr tree. Poll this path with GET while pending or running.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cached archive is ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResultArchiveExport"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Archive is pending or running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResultArchiveExport"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Job not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Job has not completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The last archive attempt failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResultArchiveExport"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Get result archive status",
+        "description": "Returns archive status and, when ready, a one-hour signed download URL.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Archive is ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResultArchiveExport"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Archive is pending or running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResultArchiveExport"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Job not found or archive not started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The last archive attempt failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResultArchiveExport"
                 }
               }
             }

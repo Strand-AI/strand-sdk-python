@@ -467,3 +467,42 @@ def test_export_ome_tiff_waits_and_downloads(
     assert download.called
     assert written == target
     assert target.read_bytes() == b"TIFF"
+
+
+@respx.mock
+def test_request_and_get_results_archive(client: strand.Client) -> None:
+    job_id = "33333333-3333-4333-8333-333333333333"
+    endpoint = f"{API_ROOT}/jobs/{job_id}/exports/ome-zarr-zip"
+    respx.post(endpoint).mock(
+        return_value=Response(
+            202,
+            json={
+                "status": "pending",
+                "format": "ome-zarr-zip",
+                "sizeBytes": None,
+                "updatedAt": "2026-08-06T10:00:00Z",
+            },
+        )
+    )
+    respx.get(endpoint).mock(
+        return_value=Response(
+            200,
+            json={
+                "status": "ready",
+                "format": "ome-zarr-zip",
+                "sizeBytes": 2048,
+                "downloadUrl": "https://storage.example/export.ome-zarr.zip?signature=test",
+                "downloadUrlExpiresAt": "2026-08-06T11:00:00Z",
+                "updatedAt": "2026-08-06T10:05:00Z",
+            },
+        )
+    )
+
+    job = strand.Job(id=job_id, reserved_credits=None, client=client)
+    requested = job.request_results_archive()
+    ready = job.get_results_archive()
+
+    assert requested.status == "pending"
+    assert ready.status == "ready"
+    assert ready.size_bytes == 2048
+    assert ready.download_url is not None

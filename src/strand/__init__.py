@@ -34,13 +34,21 @@ from ._errors import (
     JobFailedError,
     JobTimeoutError,
     NotFoundError,
-    RateLimitError,
     StrandError,
     UnknownMarkerError,
     UploadError,
 )
 from ._jobs import Job, JobEvent
-from ._models import Estimate, JobStatus, OmeTiffExport, PredictResult, Sample, Upload
+from ._models import (
+    Estimate,
+    JobStatus,
+    OmeTiffExport,
+    PredictResult,
+    ResultArchiveExport,
+    Sample,
+    Upload,
+    UploadHandoff,
+)
 from ._predict import ModelId
 from ._results import JobResults
 from ._uploads import UploadList
@@ -61,12 +69,13 @@ __all__ = [
     "NotFoundError",
     "OmeTiffExport",
     "PredictResult",
-    "RateLimitError",
+    "ResultArchiveExport",
     "Sample",
     "StrandError",
     "UnknownMarkerError",
     "Upload",
     "UploadError",
+    "UploadHandoff",
     "UploadList",
 ]
 

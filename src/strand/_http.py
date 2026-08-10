@@ -22,7 +22,6 @@ from ._errors import (
     BadRequestError,
     InsufficientCreditsError,
     NotFoundError,
-    RateLimitError,
     StrandError,
     UnknownMarkerError,
 )
@@ -38,24 +37,25 @@ class HttpSession:
     def __init__(
         self,
         *,
+        access_token: str | None,
         api_key: str | None,
         base_url: str | None,
         timeout: float | httpx.Timeout | None,
         client: httpx.Client | None = None,
     ) -> None:
-        resolved_key = api_key or os.environ.get("STRAND_API_KEY")
-        if not resolved_key:
+        resolved_credential = access_token or api_key or os.environ.get("STRAND_API_KEY")
+        if not resolved_credential:
             raise AuthError(
-                "No API key provided. Pass api_key=... or set STRAND_API_KEY.",
+                "No credential provided. Pass access_token=..., api_key=..., or set STRAND_API_KEY.",
                 status_code=401,
-                error_code="missing_api_key",
+                error_code="missing_credential",
             )
 
         resolved_base = (
             base_url or os.environ.get("STRAND_BASE_URL") or DEFAULT_BASE_URL
         ).rstrip("/")
 
-        self.api_key = resolved_key
+        self.credential = resolved_credential
         self.base_url = resolved_base
         self.api_root = f"{resolved_base}/api/v1"
         self._owned_client = client is None
@@ -63,7 +63,7 @@ class HttpSession:
             base_url=self.api_root,
             timeout=timeout if timeout is not None else DEFAULT_TIMEOUT,
             headers={
-                "Authorization": f"Bearer {resolved_key}",
+                "Authorization": f"Bearer {resolved_credential}",
                 "User-Agent": USER_AGENT,
                 "Accept": "application/json",
             },
@@ -196,13 +196,6 @@ class HttpSession:
             )
         if resp.status_code == 404:
             raise NotFoundError(message, status_code=404, error_code=error_code, body=body)
-        if resp.status_code == 429:
-            retry_after_raw = resp.headers.get("Retry-After")
-            try:
-                retry_after = int(retry_after_raw) if retry_after_raw is not None else None
-            except ValueError:
-                retry_after = None
-            raise RateLimitError(message, retry_after=retry_after, body=body)
         # 409 and other 4xx with a documented error shape — surface as generic StrandError.
         raise StrandError(
             message,

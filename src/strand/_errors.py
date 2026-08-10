@@ -96,20 +96,6 @@ class InsufficientCreditsError(StrandError):
         self.balance = balance
 
 
-class RateLimitError(StrandError):
-    """429 — per-org concurrent job cap exceeded. `retry_after` is in seconds."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        retry_after: int | None = None,
-        body: dict[str, Any] | None = None,
-    ) -> None:
-        super().__init__(message, status_code=429, error_code="rate_limited", body=body)
-        self.retry_after = retry_after
-
-
 class JobFailedError(StrandError):
     """Raised by `Job.wait()` when the job terminates with `status == "failed"`."""
 

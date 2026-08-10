@@ -13,7 +13,7 @@ import httpx
 from httpx_sse import EventSource, SSEError
 
 from ._errors import JobFailedError, JobTimeoutError, StrandError
-from ._models import JobStatus, OmeTiffExport
+from ._models import JobStatus, OmeTiffExport, ResultArchiveExport
 from ._results import JobResults
 
 if TYPE_CHECKING:
@@ -244,6 +244,24 @@ class Job:
             expected=(200, 202),
         )
         return OmeTiffExport._from_dict(raw)
+
+    def request_results_archive(self) -> ResultArchiveExport:
+        """Start or reuse a cached whole-result OME-Zarr ZIP export."""
+        raw = self._http.request_json(
+            "POST",
+            f"/jobs/{self.id}/exports/ome-zarr-zip",
+            expected=(200, 202),
+        )
+        return ResultArchiveExport._from_dict(raw)
+
+    def get_results_archive(self) -> ResultArchiveExport:
+        """Fetch result-archive status and its signed URL when ready."""
+        raw = self._http.request_json(
+            "GET",
+            f"/jobs/{self.id}/exports/ome-zarr-zip",
+            expected=(200, 202),
+        )
+        return ResultArchiveExport._from_dict(raw)
 
     def export_ome_tiff(
         self,
