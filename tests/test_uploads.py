@@ -35,6 +35,55 @@ def test_create_upload_handoff(client: strand.Client) -> None:
 
 
 @respx.mock
+@pytest.mark.parametrize("value", [True, False])
+def test_create_upload_handoff_forwards_auto_segment(
+    client: strand.Client, value: bool
+) -> None:
+    """`auto_segment` is posted as `autoSegment` on the handoff-create body."""
+    import json
+
+    route = respx.post(f"{API_ROOT}/mcp/upload-handoffs").mock(
+        return_value=Response(
+            200,
+            json={
+                "handoffUrl": "https://app.strandai.com/mcp/upload#token=secret",
+                "expiresAt": "2026-08-07T10:00:00Z",
+                "instructions": "Open the page and choose a slide.",
+            },
+        )
+    )
+
+    client.uploads.create_handoff(filename_hint="slide.svs", auto_segment=value)
+
+    body = json.loads(route.calls[0].request.content)
+    assert body["autoSegment"] is value
+
+
+@respx.mock
+def test_create_upload_handoff_omits_auto_segment_when_not_set(
+    client: strand.Client,
+) -> None:
+    """Default: no `autoSegment` key on the body (org default applies)."""
+    import json
+
+    route = respx.post(f"{API_ROOT}/mcp/upload-handoffs").mock(
+        return_value=Response(
+            200,
+            json={
+                "handoffUrl": "https://app.strandai.com/mcp/upload#token=secret",
+                "expiresAt": "2026-08-07T10:00:00Z",
+                "instructions": "Open the page and choose a slide.",
+            },
+        )
+    )
+
+    client.uploads.create_handoff(filename_hint="slide.svs")
+
+    body = json.loads(route.calls[0].request.content)
+    assert "autoSegment" not in body
+
+
+@respx.mock
 def test_upload_file_chunks_and_finalizes(
     client: strand.Client, tmp_path: Path
 ) -> None:

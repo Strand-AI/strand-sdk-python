@@ -138,7 +138,12 @@ class Uploads:
         raw = self._http.request_json("GET", f"/uploads/{upload_id}")
         return Upload._from_row(raw)
 
-    def create_handoff(self, *, filename_hint: str | None = None) -> UploadHandoff:
+    def create_handoff(
+        self,
+        *,
+        filename_hint: str | None = None,
+        auto_segment: bool | None = None,
+    ) -> UploadHandoff:
         """Create an OAuth-bound browser handoff for one local slide.
 
         Remote services cannot read a path on the user's computer. This method
@@ -147,8 +152,20 @@ class Uploads:
 
         Requires an OAuth access token with ``samples:write``. API keys are
         intentionally rejected because a handoff must bind to a real user.
+
+        Args:
+            filename_hint: Optional expected filename shown on the handoff page.
+            auto_segment: Per-upload auto-segmentation override, stored on the
+                handoff so the browser upload honors it. ``None`` (default) uses
+                the org's default; ``False`` skips segmentation (the slide is
+                still ingested and rendered); ``True`` forces it on even when the
+                org default is off.
         """
-        body = {"filenameHint": filename_hint} if filename_hint else {}
+        body: dict[str, Any] = {}
+        if filename_hint:
+            body["filenameHint"] = filename_hint
+        if auto_segment is not None:
+            body["autoSegment"] = auto_segment
         raw = self._http.request_json("POST", "/mcp/upload-handoffs", json=body)
         return UploadHandoff._from_dict(raw)
 
