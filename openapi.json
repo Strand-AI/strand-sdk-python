@@ -244,7 +244,8 @@
             "format": "uuid"
           },
           "status": {
-            "type": "string"
+            "type": "string",
+            "description": "Lifecycle: `queued` → `running` → `postprocessing` → terminal. Terminal values: `completed` (every requested marker delivered), `partial_failed` (some markers delivered and downloadable, the rest terminally failed after server-side retries — see per-marker coverage), `failed` (nothing delivered), `cancelled`."
           },
           "progress": {
             "type": "number",

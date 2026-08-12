@@ -275,7 +275,7 @@ class JobStatus:
 
     @property
     def is_terminal(self) -> bool:
-        return self.status in {"completed", "failed", "cancelled"}
+        return self.status in {"completed", "partial_failed", "failed", "cancelled"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,8 +357,10 @@ class PredictResult:
 
     Attributes:
         job_id: Backend job identifier.
-        status: Terminal job status — always `"completed"` for a returned
-            `PredictResult` (failures raise `JobFailedError` before this is built).
+        status: Terminal job status — `"completed"` (every requested marker
+            delivered) or `"partial_failed"` (some markers delivered, the rest
+            terminally failed after server-side retries). Total failures raise
+            `JobFailedError` before this is built.
         credits_used: Credits the platform reserved for the job.
         model: Canonical Lattice version that served the request (e.g.
             `"v0.7"`). Always a v0.X label — even when the caller passed

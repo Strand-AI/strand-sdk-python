@@ -19,7 +19,12 @@ from ._results import JobResults
 if TYPE_CHECKING:
     from ._client import Client
 
-TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+# `partial_failed` is terminal WITH results: the run delivered some markers and
+# terminally failed the rest (after server-side retries were exhausted). It does
+# NOT raise JobFailedError — inspect `JobStatus.status` and the per-marker
+# coverage to see what landed. `completed` always means every requested marker
+# delivered.
+TERMINAL_STATUSES = frozenset({"completed", "partial_failed", "failed", "cancelled"})
 
 
 @dataclass
@@ -158,7 +163,10 @@ class Job:
             The terminal `JobStatus`.
 
         Raises:
-            JobFailedError: status terminates as `"failed"`.
+            JobFailedError: status terminates as `"failed"` (nothing was
+                delivered). A `"partial_failed"` terminal status — some markers
+                delivered, some failed — returns normally; check
+                `JobStatus.status` to distinguish it from `"completed"`.
             JobTimeoutError: `timeout` elapses before terminal status.
         """
         deadline = time.monotonic() + timeout if timeout is not None else None
