@@ -1217,7 +1217,34 @@
             "content": {
               "text/event-stream": {
                 "schema": {
-                  "type": "string"
+                  "type": "object",
+                  "properties": {
+                    "event": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "retry": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No job matches the given id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1247,6 +1274,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Results"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No job matches the given id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
