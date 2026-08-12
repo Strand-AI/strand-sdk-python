@@ -63,7 +63,10 @@ SPEC_COVERAGE: dict[str, tuple[Any, dict[str, str]]] = {
     ),
     "GET /uploads/{id}": (Uploads.get, {"id": "upload_id"}),
     "POST /uploads/{id}/complete": (Uploads.upload_file, {"id": DERIVED}),
-    "POST /mcp/upload-handoffs": (Uploads.create_handoff, {"filenameHint": "filename_hint"}),
+    "POST /mcp/upload-handoffs": (
+        Uploads.create_handoff,
+        {"filenameHint": "filename_hint", "autoSegment": "auto_segment"},
+    ),
     "POST /predict/estimate": (Predict.estimate, {"uploadId": "upload_id", "markers": "markers"}),
     "POST /predict": (
         Predict.submit,

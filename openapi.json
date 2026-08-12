@@ -872,6 +872,10 @@
                   "filenameHint": {
                     "type": "string",
                     "maxLength": 500
+                  },
+                  "autoSegment": {
+                    "type": "boolean",
+                    "description": "Per-upload auto-segmentation override, stored on the handoff and honored when the browser upload initiates. Omit to use the organization's `autoSegmentDefault`; false skips segmentation (the slide is still ingested and rendered); true forces it on even when the org default is off."
                   }
                 }
               }
