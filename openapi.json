@@ -838,6 +838,16 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Upload not found",
             "content": {
@@ -952,6 +962,16 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Upload not found",
             "content": {
@@ -1002,6 +1022,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Estimate"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1070,6 +1100,16 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "402": {
             "description": "Insufficient credits",
             "content": {
@@ -1114,6 +1154,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1183,6 +1233,16 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found",
             "content": {
@@ -1239,6 +1299,16 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "404": {
             "description": "No job matches the given id",
             "content": {
@@ -1274,6 +1344,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Results"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1333,6 +1413,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OmeTiffExport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1404,6 +1494,16 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Job not found or export not started",
             "content": {
@@ -1459,6 +1559,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ResultArchiveExport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1526,6 +1636,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ResultArchiveExport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2223,6 +2343,16 @@
               "application/json": {
                 "schema": {
                   "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
