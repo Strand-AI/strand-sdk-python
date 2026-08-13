@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Release notes on GitHub are extracted from the section header matching the
 published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
+## [0.14.0] - 2026-08-13
+
+### Added
+
+- A `strand` command-line interface, installed as a console script with the
+  package (`pip install strand-sdk` puts `strand` on your `PATH`). It wraps the
+  same `strand.Client` the library and MCP tools use, so the terminal surface
+  can't drift from the SDK. Commands: `strand upload <file> [--mpp] [--content-type] [--if-not-exists]`,
+  `strand predict <sample-id> --markers CD3e,CD8,…  [--model]`,
+  `strand status <job-id>`, `strand results <job-id> [--out DIR]`, and
+  `strand samples list [--limit] [--cursor]`. Reads `STRAND_API_KEY` /
+  `STRAND_BASE_URL` from the environment and prints JSON to stdout.
+
 ## [0.13.0] - 2026-08-10
 
 ### Added
