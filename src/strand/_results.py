@@ -164,49 +164,7 @@ class JobResults:
         what makes them readable without a backfill.) A chunk object that is
         absent is left absent — zarr reads missing chunks as `fill_value`.
         """
-        out = Path(target)
-        out.mkdir(parents=True, exist_ok=True)
-
-        root = copy.deepcopy(self.root_meta())
-        missing: list[str] = []
-
-        for ms in _multiscales(root):
-            kept: list[dict[str, Any]] = []
-            for dataset in ms.get("datasets") or []:
-                path = dataset.get("path")
-                if not isinstance(path, str):
-                    continue
-                try:
-                    array_meta = self.get_json(f"{path}/zarr.json")
-                except NotFoundError:
-                    missing.append(path)
-                    continue
-                kept.append(dataset)
-                dest = out / path
-                dest.mkdir(parents=True, exist_ok=True)
-                (dest / "zarr.json").write_bytes(json.dumps(array_meta).encode("utf-8"))
-                for chunk_path in _enumerate_chunks(array_meta):
-                    file_path = f"{path}/{chunk_path}"
-                    try:
-                        data = self.get_bytes(file_path)
-                    except NotFoundError:
-                        # Absent chunk/shard object == every element is fill_value.
-                        continue
-                    full = out / file_path
-                    full.parent.mkdir(parents=True, exist_ok=True)
-                    full.write_bytes(data)
-            ms["datasets"] = kept
-
-        (out / "zarr.json").write_bytes(json.dumps(root).encode("utf-8"))
-
-        if missing:
-            warnings.warn(
-                "Result manifest declares datasets that are not in storage; "
-                f"omitted from the local copy: {', '.join(missing)}",
-                UserWarning,
-                stacklevel=2,
-            )
-        return out
+        return mirror_zarr_store(self.root_meta(), self.get_json, self.get_bytes, target)
 
     # ---------- per-array decode ----------
 
@@ -328,6 +286,66 @@ def _multiscales(root_meta: dict[str, Any]) -> list[dict[str, Any]]:
     attrs = root_meta.get("attributes") or {}
     ms = attrs.get("multiscales") or []
     return [m for m in ms if isinstance(m, dict)]
+
+
+def mirror_zarr_store(
+    root_meta: dict[str, Any],
+    get_json: Any,
+    get_bytes: Any,
+    target: str | Path,
+) -> Path:
+    """Byte-for-byte mirror an OME-Zarr v3 store to `target/`, returning it.
+
+    The store, not the manifest, is authoritative: a dataset the root manifest
+    declares but storage doesn't hold is dropped from the local copy's
+    `zarr.json` (with a `UserWarning`), and an absent chunk object is left
+    absent (zarr reads it as `fill_value`). Parameterized on `get_json(path)` /
+    `get_bytes(path)` fetchers so it serves both the job-results proxy and the
+    public-cohort zarr proxy — the two stores are the same shape.
+    """
+    out = Path(target)
+    out.mkdir(parents=True, exist_ok=True)
+
+    root = copy.deepcopy(root_meta)
+    missing: list[str] = []
+
+    for ms in _multiscales(root):
+        kept: list[dict[str, Any]] = []
+        for dataset in ms.get("datasets") or []:
+            path = dataset.get("path")
+            if not isinstance(path, str):
+                continue
+            try:
+                array_meta = get_json(f"{path}/zarr.json")
+            except NotFoundError:
+                missing.append(path)
+                continue
+            kept.append(dataset)
+            dest = out / path
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / "zarr.json").write_bytes(json.dumps(array_meta).encode("utf-8"))
+            for chunk_path in _enumerate_chunks(array_meta):
+                file_path = f"{path}/{chunk_path}"
+                try:
+                    data = get_bytes(file_path)
+                except NotFoundError:
+                    # Absent chunk/shard object == every element is fill_value.
+                    continue
+                full = out / file_path
+                full.parent.mkdir(parents=True, exist_ok=True)
+                full.write_bytes(data)
+        ms["datasets"] = kept
+
+    (out / "zarr.json").write_bytes(json.dumps(root).encode("utf-8"))
+
+    if missing:
+        warnings.warn(
+            "Zarr manifest declares datasets that are not in storage; "
+            f"omitted from the local copy: {', '.join(missing)}",
+            UserWarning,
+            stacklevel=2,
+        )
+    return out
 
 
 def _zstd_decompress(data: bytes, expected: int) -> bytes:

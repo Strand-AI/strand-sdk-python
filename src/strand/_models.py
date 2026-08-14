@@ -359,6 +359,81 @@ class UploadCompletion:
 
 
 @dataclass(frozen=True, slots=True)
+class PublicSampleSummary:
+    """A card in the public-cohort listing (`client.public.list()`).
+
+    Attributes:
+        public_id: Stable public id — pass to `client.public.get(...)`.
+        title: Display title.
+        thumbnail_url: API-relative path to the JPEG thumbnail byte endpoint.
+        tags: Public display tags (cohort/site labels), sorted.
+        metadata: Public-visible key/value metadata curated for the sample.
+    """
+
+    public_id: str
+    title: str
+    thumbnail_url: str
+    tags: list[str]
+    metadata: dict[str, Any]
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> PublicSampleSummary:
+        return cls(
+            public_id=str(raw["publicId"]),
+            title=str(raw.get("title", "")),
+            thumbnail_url=str(raw.get("thumbnailUrl", "")),
+            tags=[str(t) for t in raw.get("tags", [])],
+            metadata=dict(raw.get("metadata") or {}),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PublicSampleList:
+    """One page of the curated public cohort (`client.public.list()`)."""
+
+    items: list[PublicSampleSummary]
+    page: int
+    page_size: int
+    total_count: int
+    total_pages: int
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> PublicSampleList:
+        return cls(
+            items=[PublicSampleSummary._from_dict(i) for i in raw.get("items", [])],
+            page=int(raw.get("page", 1)),
+            page_size=int(raw.get("pageSize", 0)),
+            total_count=int(raw.get("totalCount", 0)),
+            total_pages=int(raw.get("totalPages", 0)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PublicSampleGeometry:
+    """Level-0 dimensions and microns-per-pixel of a public sample's H&E image."""
+
+    width_px: int | None
+    height_px: int | None
+    mpp_x: float | None
+    mpp_y: float | None
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> PublicSampleGeometry:
+        def _num(key: str) -> float | None:
+            v = raw.get(key)
+            return float(v) if isinstance(v, (int, float)) else None
+
+        w = raw.get("widthPx")
+        h = raw.get("heightPx")
+        return cls(
+            width_px=int(w) if isinstance(w, int) else None,
+            height_px=int(h) if isinstance(h, int) else None,
+            mpp_x=_num("mppX"),
+            mpp_y=_num("mppY"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class PredictResult:
     """Outcome of a one-shot `client.predict(...)` call.
 

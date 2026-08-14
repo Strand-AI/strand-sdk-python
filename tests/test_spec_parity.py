@@ -29,6 +29,7 @@ from typing import Any
 from strand._client import _JobsNamespace
 from strand._jobs import Job
 from strand._predict import Predict
+from strand._public import PublicSample, PublicSamples
 from strand._results import JobResults
 from strand._samples import Samples
 from strand._uploads import Uploads
@@ -101,6 +102,15 @@ SPEC_COVERAGE: dict[str, tuple[Any, dict[str, str]]] = {
             "useOrgDefault": "use_org_default",
             "reason": "reason",
         },
+    ),
+    "GET /public/samples": (
+        PublicSamples.list,
+        {"page": "page", "pageSize": "page_size", "tag": "tag"},
+    ),
+    "GET /public/samples/{publicId}": (PublicSamples.get, {"publicId": "public_id"}),
+    "GET /public/samples/{publicId}/zarr/{path}": (
+        PublicSample.download_to,
+        {"publicId": BOUND, "path": DERIVED},  # id from the handle; paths from the zarr listing
     ),
     "POST /samples/{id}/restore": (Samples.restore, {"id": "sample_id"}),
     "GET /samples/{id}/tags": (Samples.list_tags, {"id": "sample_id"}),

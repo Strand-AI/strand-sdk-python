@@ -44,12 +44,16 @@ from ._models import (
     JobStatus,
     OmeTiffExport,
     PredictResult,
+    PublicSampleGeometry,
+    PublicSampleList,
+    PublicSampleSummary,
     ResultArchiveExport,
     Sample,
     Upload,
     UploadCompletion,
 )
 from ._predict import ModelId
+from ._public import PublicSample, PublicSamples
 from ._results import JobResults
 from ._uploads import UploadList
 
@@ -69,6 +73,11 @@ __all__ = [
     "NotFoundError",
     "OmeTiffExport",
     "PredictResult",
+    "PublicSample",
+    "PublicSampleGeometry",
+    "PublicSampleList",
+    "PublicSampleSummary",
+    "PublicSamples",
     "ResultArchiveExport",
     "Sample",
     "StrandError",

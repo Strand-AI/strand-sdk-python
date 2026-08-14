@@ -47,6 +47,12 @@ samples_app = typer.Typer(
 )
 app.add_typer(samples_app, name="samples")
 
+public_app = typer.Typer(
+    help="Browse and read the free, credit-less public cohort.",
+    no_args_is_help=True,
+)
+app.add_typer(public_app, name="public")
+
 
 # ---------- shared helpers ----------
 
@@ -233,6 +239,55 @@ def samples_list(
     try:
         page = client.uploads.list(limit=limit, cursor=cursor)
         _emit(page)
+    except StrandError as exc:
+        _fail(str(exc))
+    finally:
+        client.close()
+
+
+@public_app.command("list")
+def public_list(
+    page: int | None = typer.Option(None, "--page", help="1-based page number (default 1)."),
+    page_size: int | None = typer.Option(
+        None, "--page-size", help="Items per page (default 48, max 100)."
+    ),
+    tag: str | None = typer.Option(None, "--tag", help="Filter by a public display tag."),
+) -> None:
+    """List the free public cohort (paginated, newest first)."""
+    client = _client()
+    try:
+        _emit(client.public.list(page=page, page_size=page_size, tag=tag))
+    except StrandError as exc:
+        _fail(str(exc))
+    finally:
+        client.close()
+
+
+@public_app.command("get")
+def public_get(
+    public_id: str = typer.Argument(..., help="Public id from `strand public list`."),
+    download: Path | None = typer.Option(
+        None,
+        "--download",
+        "-d",
+        help="Directory to mirror the sample's OME-Zarr (H&E + markers) into.",
+    ),
+) -> None:
+    """Show a public sample's detail; with --download, materialize its marker data."""
+    client = _client()
+    try:
+        sample = client.public.get(public_id)
+        detail: dict[str, Any] = {
+            "public_id": sample.public_id,
+            "title": sample.title,
+            "tags": sample.tags,
+            "metadata": sample.metadata,
+            "geometry": sample.geometry,
+            "markers": sample.markers,
+        }
+        if download is not None:
+            detail["downloaded_to"] = str(sample.download_to(download))
+        _emit(detail)
     except StrandError as exc:
         _fail(str(exc))
     finally:

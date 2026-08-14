@@ -205,6 +205,51 @@ def test_client_error_exits_nonzero(fake_client: MagicMock) -> None:
     fake_client.close.assert_called_once()
 
 
+# ---------- public cohort ----------
+
+
+def test_public_list_passes_pagination(fake_client: MagicMock) -> None:
+    fake_client.public.list.return_value = {"items": [], "totalCount": 0}
+    result = runner.invoke(
+        _cli.app, ["public", "list", "--page", "2", "--page-size", "10", "--tag", "tcga-coad"]
+    )
+    assert result.exit_code == 0, result.output
+    _, kwargs = fake_client.public.list.call_args
+    assert kwargs == {"page": 2, "page_size": 10, "tag": "tcga-coad"}
+    fake_client.close.assert_called_once()
+
+
+def test_public_get_prints_detail(fake_client: MagicMock) -> None:
+    sample = MagicMock()
+    sample.public_id = "pub-1"
+    sample.title = "TCGA slide"
+    sample.tags = ["tcga-coad"]
+    sample.metadata = {}
+    sample.geometry = {"widthPx": 20000}
+    sample.markers = ["CD3", "CD8"]
+    fake_client.public.get.return_value = sample
+    result = runner.invoke(_cli.app, ["public", "get", "pub-1"])
+    assert result.exit_code == 0, result.output
+    assert '"public_id": "pub-1"' in result.output
+    sample.download_to.assert_not_called()
+
+
+def test_public_get_downloads_when_requested(fake_client: MagicMock, tmp_path: Path) -> None:
+    sample = MagicMock()
+    sample.public_id = "pub-1"
+    sample.markers = ["CD3"]
+    sample.metadata = {}
+    sample.geometry = {}
+    sample.tags = []
+    sample.title = "t"
+    dest = tmp_path / "store"
+    sample.download_to.return_value = dest
+    fake_client.public.get.return_value = sample
+    result = runner.invoke(_cli.app, ["public", "get", "pub-1", "--download", str(dest)])
+    assert result.exit_code == 0, result.output
+    sample.download_to.assert_called_once_with(dest)
+
+
 # ---------- help renders ----------
 
 
@@ -218,6 +263,9 @@ def test_client_error_exits_nonzero(fake_client: MagicMock) -> None:
         ["results", "--help"],
         ["samples", "--help"],
         ["samples", "list", "--help"],
+        ["public", "--help"],
+        ["public", "list", "--help"],
+        ["public", "get", "--help"],
     ],
 )
 def test_help_renders(argv: list[str]) -> None:

@@ -640,6 +640,170 @@
             "format": "date-time"
           }
         }
+      },
+      "PublicSampleListItem": {
+        "type": "object",
+        "description": "A card in the public cohort listing. `thumbnailUrl` is a v1-relative link to the authed thumbnail byte endpoint.",
+        "required": [
+          "publicId",
+          "title",
+          "thumbnailUrl",
+          "tags",
+          "metadata"
+        ],
+        "properties": {
+          "publicId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Stable public identifier for the release. Use it on the detail + byte endpoints."
+          },
+          "title": {
+            "type": "string",
+            "description": "Display title for the public sample."
+          },
+          "thumbnailUrl": {
+            "type": "string",
+            "description": "v1-relative path to the sample's JPEG thumbnail (`GET /public/samples/{publicId}/thumbnail`)."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Public-visible display tags (cohort/site labels), sorted."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Public-visible key/value metadata curated for this sample."
+          }
+        }
+      },
+      "PublicSampleList": {
+        "type": "object",
+        "description": "A page of the curated public cohort, newest-first.",
+        "required": [
+          "items",
+          "page",
+          "pageSize",
+          "totalCount",
+          "totalPages"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicSampleListItem"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "description": "1-based page number of this response."
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "Number of items per page."
+          },
+          "totalCount": {
+            "type": "integer",
+            "description": "Total public samples matching the filter."
+          },
+          "totalPages": {
+            "type": "integer",
+            "description": "Total pages at this page size (0 when empty)."
+          }
+        }
+      },
+      "PublicSampleDetail": {
+        "type": "object",
+        "description": "A public sample's curated detail: display fields, geometry, and the live marker names, plus v1-relative links to the authed byte endpoints. Never exposes the owning org, internal sample id, or storage paths.",
+        "required": [
+          "publicId",
+          "title",
+          "thumbnailUrl",
+          "tags",
+          "metadata",
+          "geometry",
+          "viewer"
+        ],
+        "properties": {
+          "publicId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "thumbnailUrl": {
+            "type": "string",
+            "description": "v1-relative path to the sample's JPEG thumbnail."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "geometry": {
+            "type": "object",
+            "required": [
+              "widthPx",
+              "heightPx",
+              "mppX",
+              "mppY"
+            ],
+            "description": "Level-0 pixel dimensions and microns-per-pixel of the H&E image.",
+            "properties": {
+              "widthPx": {
+                "type": "integer"
+              },
+              "heightPx": {
+                "type": "integer"
+              },
+              "mppX": {
+                "type": "number",
+                "nullable": true
+              },
+              "mppY": {
+                "type": "number",
+                "nullable": true
+              }
+            }
+          },
+          "viewer": {
+            "type": "object",
+            "required": [
+              "pyramidUrl",
+              "markers"
+            ],
+            "description": "How to read the pixel data: the OME-Zarr pyramid base path and the marker channels it carries.",
+            "properties": {
+              "pyramidUrl": {
+                "type": "string",
+                "description": "v1-relative base path of the OME-Zarr store (`GET /public/samples/{publicId}/zarr/{...path}`). The root manifest is `{pyramidUrl}/zarr.json`."
+              },
+              "markers": {
+                "type": "array",
+                "description": "Live marker channels available in the pyramid.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -2277,6 +2441,247 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/samples": {
+      "get": {
+        "summary": "List the public cohort",
+        "description": "List the curated public cohort (the TCGA release) newest-first. Available to any authenticated org for free — the cohort is org-independent, so a caller reads it regardless of their own org. Never reserves or spends credits.",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            },
+            "description": "1-based page number. Out-of-range or malformed values read page 1."
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 48
+            },
+            "description": "Items per page (clamped to 100)."
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional public display-tag filter. An unknown or malformed tag returns an empty page (it is never an enumeration oracle for private tags)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of the public cohort",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicSampleList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/samples/{publicId}": {
+      "get": {
+        "summary": "Get a public sample",
+        "description": "Read one public sample's curated detail: title, tags, public metadata, geometry, live marker names, and v1-relative links to its byte endpoints. Available to any authenticated org for free. A `publicId` that is not a currently-public sample returns 404 — there is no path to a non-public or org-scoped sample.",
+        "parameters": [
+          {
+            "name": "publicId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The public sample detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicSampleDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No currently-public sample matches the given publicId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/samples/{publicId}/zarr/{path}": {
+      "get": {
+        "summary": "Stream a public sample's OME-Zarr pyramid",
+        "description": "Authenticated byte proxy for a public sample's OME-Zarr store — the H&E image (`he/...`) and every pinned marker channel (`markers/{marker}/...`). The root manifest is `zarr.json`. This is the way to read the actual marker pixel data. Only the `he/` and `markers/` namespaces are served; everything else is denied. Never reserves or spends credits.",
+        "parameters": [
+          {
+            "name": "publicId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "description": "Path within the zarr store; slashes are not URL-encoded (e.g. `zarr.json`, `he/0/zarr.json`, `markers/CD3/c/0/0/0`).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File bytes (binary for chunks, JSON for metadata).",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Public sample or file not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/samples/{publicId}/thumbnail": {
+      "get": {
+        "summary": "Get a public sample's thumbnail",
+        "description": "Authenticated JPEG thumbnail for a public sample. Streamed through this release-keyed endpoint (never a signed GCS URL). Never reserves or spends credits.",
+        "parameters": [
+          {
+            "name": "publicId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JPEG thumbnail bytes.",
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No currently-public sample matches the given publicId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
                 }
               }
             }

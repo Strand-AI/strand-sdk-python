@@ -8,6 +8,7 @@ import httpx
 
 from ._http import DEFAULT_TIMEOUT, HttpSession
 from ._predict import Predict
+from ._public import PublicSamples
 from ._samples import Samples
 from ._uploads import Uploads
 
@@ -95,6 +96,7 @@ class Client:
         self.predict = Predict(self._http, self)
         self.jobs = _JobsNamespace(self)
         self.samples = Samples(self._http)
+        self.public = PublicSamples(self._http)
 
     @property
     def base_url(self) -> str:

@@ -12,8 +12,12 @@ we intend to close (they keep CI green while staying visible in review).
 from __future__ import annotations
 
 # Spec operations ("METHOD /path") with NO Python SDK surface at all.
-# Empty today: every operation in openapi.json is reachable from `strand`.
-UNMAPPED_OPERATIONS: dict[str, str] = {}
+UNMAPPED_OPERATIONS: dict[str, str] = {
+    "GET /public/samples/{publicId}/thumbnail": (
+        "thumbnail bytes are a display asset, not data; the SDK reads the public "
+        "cohort's pixel data via PublicSample.download_to (phase-2: add a thumbnail helper)"
+    ),
+}
 
 # Per-operation spec fields (query/path params + request-body properties)
 # deliberately NOT settable through the SDK. Keyed "METHOD /path" -> field ->
@@ -33,5 +37,8 @@ CLIENT_ONLY_PARAMS: dict[str, dict[str, str]] = {
     },
     "JobResults.download_to": {
         "target": "local destination directory for the fetched zarr tree",
+    },
+    "PublicSample.download_to": {
+        "target": "local destination directory for the mirrored public zarr tree",
     },
 }
