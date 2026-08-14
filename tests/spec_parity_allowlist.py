@@ -12,13 +12,8 @@ we intend to close (they keep CI green while staying visible in review).
 from __future__ import annotations
 
 # Spec operations ("METHOD /path") with NO Python SDK surface at all.
-UNMAPPED_OPERATIONS: dict[str, str] = {
-    "POST /mcp/upload-handoffs": (
-        "browser upload handoff is retired; create_handoff was removed from the SDK. The "
-        "endpoint + its spec entry are deleted in the follow-up platform PR — agents now use "
-        "uploads.create_session()/complete()."
-    ),
-}
+# Empty today: every operation in openapi.json is reachable from `strand`.
+UNMAPPED_OPERATIONS: dict[str, str] = {}
 
 # Per-operation spec fields (query/path params + request-body properties)
 # deliberately NOT settable through the SDK. Keyed "METHOD /path" -> field ->

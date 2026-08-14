@@ -412,27 +412,6 @@
           }
         }
       },
-      "UploadHandoff": {
-        "type": "object",
-        "required": [
-          "handoffUrl",
-          "expiresAt",
-          "instructions"
-        ],
-        "properties": {
-          "handoffUrl": {
-            "type": "string",
-            "format": "uri"
-          },
-          "expiresAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "instructions": {
-            "type": "string"
-          }
-        }
-      },
       "ExpirationUpdate": {
         "type": "object",
         "description": "Provide exactly one of `expiresAt`, `neverExpire: true`, or `useOrgDefault: true`. `neverExpire: true` is sugar for `expiresAt: null` (custom). `useOrgDefault: true` clears the custom expiration and follows the org's default policy.",
@@ -850,81 +829,6 @@
           },
           "404": {
             "description": "Upload not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/mcp/upload-handoffs": {
-      "post": {
-        "summary": "Create a secure browser slide-upload handoff",
-        "description": "OAuth only. Creates a single-use, expiring browser URL bound to the token's user and selected organization. The browser streams the chosen WSI directly to GCS; bytes do not pass through the MCP resource server.",
-        "security": [
-          {
-            "OAuth2": [
-              "samples:write"
-            ]
-          }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "filenameHint": {
-                    "type": "string",
-                    "maxLength": 500
-                  },
-                  "autoSegment": {
-                    "type": "boolean",
-                    "description": "Per-upload auto-segmentation override, stored on the handoff and honored when the browser upload initiates. Omit to use the organization's `autoSegmentDefault`; false skips segmentation (the slide is still ingested and rendered); true forces it on even when the org default is off."
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Upload handoff created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UploadHandoff"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid input",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Missing or invalid OAuth token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "API keys cannot create browser handoffs",
             "content": {
               "application/json": {
                 "schema": {
