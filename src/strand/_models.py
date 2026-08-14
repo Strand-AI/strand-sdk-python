@@ -335,19 +335,26 @@ class ResultArchiveExport:
 
 
 @dataclass(frozen=True, slots=True)
-class UploadHandoff:
-    """Secure browser URL for uploading one local slide to an OAuth-bound org."""
+class UploadCompletion:
+    """Result of `client.uploads.complete(upload_id)` — the finalize step that
+    hands a resumable-session upload to de-identification + preprocessing.
 
-    handoff_url: str
-    expires_at: datetime | None
-    instructions: str
+    `skipped` is True when the sample had already left the `uploading` state
+    (a concurrent or repeated finalize), which makes the call idempotent.
+    """
+
+    upload_id: str
+    status: str | None
+    skipped: bool
+    warning: str | None
 
     @classmethod
-    def _from_dict(cls, raw: dict[str, Any]) -> UploadHandoff:
+    def _from_dict(cls, raw: dict[str, Any]) -> UploadCompletion:
         return cls(
-            handoff_url=str(raw["handoffUrl"]),
-            expires_at=_parse_dt(raw.get("expiresAt")),
-            instructions=str(raw["instructions"]),
+            upload_id=str(raw["uploadId"]),
+            status=str(raw["status"]) if raw.get("status") is not None else None,
+            skipped=bool(raw.get("skipped")),
+            warning=str(raw["warning"]) if raw.get("warning") is not None else None,
         )
 
 

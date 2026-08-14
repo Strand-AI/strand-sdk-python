@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -14,73 +15,119 @@ from tests.conftest import API_ROOT
 
 
 @respx.mock
-def test_create_upload_handoff(client: strand.Client) -> None:
-    route = respx.post(f"{API_ROOT}/mcp/upload-handoffs").mock(
+def test_create_session_returns_resumable_target(client: strand.Client) -> None:
+    """create_session mints the resumable session (step 1) without streaming
+    bytes — for an agent that holds the slide and PUTs it directly."""
+    upload_id = "11111111-1111-1111-1111-111111111111"
+    gcs = "https://storage.googleapis.com/test/resumable?upload_id=sess"
+    route = respx.post(f"{API_ROOT}/uploads").mock(
         return_value=Response(
             200,
             json={
-                "handoffUrl": "https://app.strandai.com/mcp/upload#token=secret",
-                "expiresAt": "2026-08-07T10:00:00Z",
-                "instructions": "Open the page and choose a slide.",
+                "uploadId": upload_id,
+                "uploadUrl": gcs,
+                "gcsPath": f"uploads/org/{upload_id}/slide.svs",
+                "existing": False,
             },
         )
     )
 
-    handoff = client.uploads.create_handoff(filename_hint="slide.svs")
+    session = client.uploads.create_session(filename="slide.svs", file_size=4096)
 
     assert route.called
-    assert route.calls[0].request.content == b'{"filenameHint":"slide.svs"}'
-    assert handoff.handoff_url.endswith("/mcp/upload#token=secret")
-    assert handoff.expires_at is not None
+    body = json.loads(route.calls[0].request.content)
+    # Content-Type is inferred from the extension; no local path is involved.
+    assert body == {"filename": "slide.svs", "fileSize": 4096, "contentType": "image/aperio-svs"}
+    assert session.id == upload_id
+    assert session.upload_url == gcs
+    assert session.gcs_path == f"uploads/org/{upload_id}/slide.svs"
 
 
 @respx.mock
-@pytest.mark.parametrize("value", [True, False])
-def test_create_upload_handoff_forwards_auto_segment(
-    client: strand.Client, value: bool
-) -> None:
-    """`auto_segment` is posted as `autoSegment` on the handoff-create body."""
-    import json
+def test_create_session_forwards_overrides(client: strand.Client) -> None:
+    """content_type / auto_segment / mpp flow onto the init body."""
+    upload_id = "22222222-2222-2222-2222-222222222222"
+    route = respx.post(f"{API_ROOT}/uploads").mock(
+        return_value=Response(
+            200,
+            json={"uploadId": upload_id, "uploadUrl": "https://gcs/x", "gcsPath": "p"},
+        )
+    )
 
-    route = respx.post(f"{API_ROOT}/mcp/upload-handoffs").mock(
+    client.uploads.create_session(
+        filename="slide.tiff",
+        file_size=10,
+        content_type="image/custom",
+        auto_segment=False,
+        mpp=(0.5, 0.5),
+    )
+
+    body = json.loads(route.calls[0].request.content)
+    assert body["contentType"] == "image/custom"
+    assert body["autoSegment"] is False
+    assert body["mpp"] == 0.5
+
+
+def test_create_session_rejects_non_positive_size(client: strand.Client) -> None:
+    with pytest.raises(ValueError, match="positive"):
+        client.uploads.create_session(filename="s.svs", file_size=0)
+
+
+@respx.mock
+def test_complete_finalizes_and_returns_completion(client: strand.Client) -> None:
+    """complete() is the finalize step an agent calls after PUTting bytes; it
+    hands the sample to de-identification + preprocessing."""
+    upload_id = "33333333-3333-4333-8333-333333333333"
+    route = respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
+        return_value=Response(200, json={"uploadId": upload_id, "status": "preprocessing"})
+    )
+
+    completion = client.uploads.complete(upload_id)
+
+    assert route.called
+    # No mpp → empty body.
+    assert route.calls[0].request.content in (b"", b"{}")
+    assert isinstance(completion, strand.UploadCompletion)
+    assert completion.upload_id == upload_id
+    assert completion.status == "preprocessing"
+    assert completion.skipped is False
+    assert completion.warning is None
+
+
+@respx.mock
+def test_complete_is_idempotent_and_surfaces_warning(client: strand.Client) -> None:
+    """A repeated finalize returns skipped=True; a scheduling failure surfaces a
+    warning rather than raising."""
+    upload_id = "44444444-4444-4444-8444-444444444444"
+    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
         return_value=Response(
             200,
             json={
-                "handoffUrl": "https://app.strandai.com/mcp/upload#token=secret",
-                "expiresAt": "2026-08-07T10:00:00Z",
-                "instructions": "Open the page and choose a slide.",
+                "uploadId": upload_id,
+                "status": "preprocessing",
+                "skipped": True,
+                "warning": "already finalized",
             },
         )
     )
 
-    client.uploads.create_handoff(filename_hint="slide.svs", auto_segment=value)
+    completion = client.uploads.complete(upload_id)
 
-    body = json.loads(route.calls[0].request.content)
-    assert body["autoSegment"] is value
+    assert completion.skipped is True
+    assert completion.warning == "already finalized"
 
 
 @respx.mock
-def test_create_upload_handoff_omits_auto_segment_when_not_set(
-    client: strand.Client,
-) -> None:
-    """Default: no `autoSegment` key on the body (org default applies)."""
-    import json
-
-    route = respx.post(f"{API_ROOT}/mcp/upload-handoffs").mock(
-        return_value=Response(
-            200,
-            json={
-                "handoffUrl": "https://app.strandai.com/mcp/upload#token=secret",
-                "expiresAt": "2026-08-07T10:00:00Z",
-                "instructions": "Open the page and choose a slide.",
-            },
-        )
+def test_complete_forwards_mpp(client: strand.Client) -> None:
+    upload_id = "55555555-5555-4555-8555-555555555555"
+    route = respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
+        return_value=Response(200, json={"uploadId": upload_id, "status": "preprocessing"})
     )
 
-    client.uploads.create_handoff(filename_hint="slide.svs")
+    client.uploads.complete(upload_id, mpp=0.2634)
 
     body = json.loads(route.calls[0].request.content)
-    assert "autoSegment" not in body
+    assert body == {"mpp": 0.2634}
 
 
 @respx.mock

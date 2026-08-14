@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from ._errors import UploadError
-from ._models import Upload, UploadHandoff
+from ._models import Upload, UploadCompletion
 from ._samples import _validate_mpp
 
 if TYPE_CHECKING:
@@ -138,36 +138,87 @@ class Uploads:
         raw = self._http.request_json("GET", f"/uploads/{upload_id}")
         return Upload._from_row(raw)
 
-    def create_handoff(
+    def create_session(
         self,
         *,
-        filename_hint: str | None = None,
+        filename: str,
+        file_size: int,
+        content_type: str | None = None,
         auto_segment: bool | None = None,
-    ) -> UploadHandoff:
-        """Create an OAuth-bound browser handoff for one local slide.
+        mpp: float | tuple[float, float] | None = None,
+    ) -> Upload:
+        """Create a resumable upload session for a client that already holds the
+        bytes (an autonomous agent, not a local file path).
 
-        Remote services cannot read a path on the user's computer. This method
-        returns a single-use Strand URL where the connected user signs in and
-        selects the file; the browser then uploads directly to GCS.
+        This is step 1 of the resumable flow WITHOUT the byte stream: it mints
+        the session and returns an `Upload` whose `upload_url` is the resumable
+        target the caller PUTs the slide bytes to directly, plus `id` (the
+        `upload_id`). After the bytes land, call `complete(upload_id)` to hand
+        the sample to de-identification + preprocessing. Contrast with
+        `upload_file`, which does all three steps for a local path in one call.
 
-        Requires an OAuth access token with ``samples:write``. API keys are
-        intentionally rejected because a handoff must bind to a real user.
+        The session (and the object key it writes to) is bound to the calling
+        org by the server; there is no way to redirect it to another org.
 
         Args:
-            filename_hint: Optional expected filename shown on the handoff page.
-            auto_segment: Per-upload auto-segmentation override, stored on the
-                handoff so the browser upload honors it. ``None`` (default) uses
-                the org's default; ``False`` skips segmentation (the slide is
-                still ingested and rendered); ``True`` forces it on even when the
-                org default is off.
+            filename: Slide filename (used for the stored object + Content-Type
+                inference).
+            file_size: Total size of the slide in bytes. Must be positive.
+            content_type: Override the MIME type. Defaults to a type inferred
+                from the filename extension.
+            auto_segment: Per-upload auto-segmentation override. ``None``
+                (default) uses the org default; ``False`` skips segmentation
+                (the slide is still ingested and rendered); ``True`` forces it on.
+            mpp: User-reported microns per pixel (isotropic), persisted at
+                creation. Pass a float, or an ``(x, y)`` tuple whose values are
+                equal. Must be > 0 and <= 100.
+
+        Returns:
+            `Upload` with `id`, `upload_url`, and `gcs_path` populated.
+        """
+        if file_size <= 0:
+            raise ValueError("file_size must be positive")
+        ct = content_type or _CONTENT_TYPE_BY_EXT.get(
+            Path(filename).suffix.lower(), DEFAULT_CONTENT_TYPE
+        )
+        mpp_value = _normalize_mpp(mpp)
+        # content_sha256 is None: the agent supplies the bytes, so we don't
+        # dedup here (that path needs a client-computed hash of a local file).
+        session, _existing = self._initiate(
+            filename, file_size, ct, None, auto_segment, mpp_value
+        )
+        return session
+
+    def complete(
+        self,
+        upload_id: str,
+        *,
+        mpp: float | tuple[float, float] | None = None,
+    ) -> UploadCompletion:
+        """Finalize a session-based upload after the bytes have been PUT.
+
+        Advances the sample out of `uploading` and into de-identification +
+        preprocessing — the SAME post-upload pipeline `upload_file` triggers, so
+        de-id runs regardless of how the bytes arrived. Idempotent: a second
+        call (or a race) returns `skipped=True`. Scoped to the calling org; an
+        `upload_id` from another org is not found.
+
+        Args:
+            upload_id: The `id` returned by `create_session`.
+            mpp: Optional user-reported microns per pixel captured at upload
+                time (isotropic scalar or an equal-valued ``(x, y)`` tuple).
         """
         body: dict[str, Any] = {}
-        if filename_hint:
-            body["filenameHint"] = filename_hint
-        if auto_segment is not None:
-            body["autoSegment"] = auto_segment
-        raw = self._http.request_json("POST", "/mcp/upload-handoffs", json=body)
-        return UploadHandoff._from_dict(raw)
+        mpp_value = _normalize_mpp(mpp)
+        if mpp_value is not None:
+            body["mpp"] = mpp_value
+        if body:
+            raw = self._http.request_json(
+                "POST", f"/uploads/{upload_id}/complete", json=body
+            )
+        else:
+            raw = self._http.request_json("POST", f"/uploads/{upload_id}/complete")
+        return UploadCompletion._from_dict(raw)
 
     def upload_file(
         self,

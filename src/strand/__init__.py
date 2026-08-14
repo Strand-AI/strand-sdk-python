@@ -47,7 +47,7 @@ from ._models import (
     ResultArchiveExport,
     Sample,
     Upload,
-    UploadHandoff,
+    UploadCompletion,
 )
 from ._predict import ModelId
 from ._results import JobResults
@@ -74,8 +74,8 @@ __all__ = [
     "StrandError",
     "UnknownMarkerError",
     "Upload",
+    "UploadCompletion",
     "UploadError",
-    "UploadHandoff",
     "UploadList",
 ]
 
