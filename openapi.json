@@ -3,7 +3,7 @@
   "info": {
     "title": "Strand AI Platform API",
     "version": "v1",
-    "description": "REST surface for uploading WSIs, submitting Lattice inference jobs, and streaming results. All endpoints require an API key or Strand OAuth access token in the `Authorization: Bearer` header."
+    "description": "REST surface for uploading WSIs, submitting Lattice inference jobs, and streaming results. All endpoints require an API key or Strand AI OAuth access token in the `Authorization: Bearer` header."
   },
   "servers": [
     {
@@ -28,7 +28,7 @@
       },
       "OAuth2": {
         "type": "oauth2",
-        "description": "Strand authorization-code flow with S256 PKCE, explicit organization consent, and RFC 8707 resource binding.",
+        "description": "Strand AI authorization-code flow with S256 PKCE, explicit organization consent, and RFC 8707 resource binding.",
         "flows": {
           "authorizationCode": {
             "authorizationUrl": "https://auth.strandai.com/oauth2/auth",
@@ -1879,7 +1879,7 @@
     "/samples/{id}/expiration": {
       "patch": {
         "summary": "Set sample expiration",
-        "description": "Set a sample to expire on a specific date, set it to never expire, or clear any custom expiration and follow the org default. Caller must be the sample's creator, an org owner/admin, or a Strand admin.",
+        "description": "Set a sample to expire on a specific date, set it to never expire, or clear any custom expiration and follow the org default. Caller must be the sample's creator, an org owner/admin, or a Strand AI admin.",
         "parameters": [
           {
             "name": "id",
@@ -2090,7 +2090,7 @@
             }
           },
           "403": {
-            "description": "Tag is administered by Strand and cannot be set via the API",
+            "description": "Tag is administered by Strand AI and cannot be set via the API",
             "content": {
               "application/json": {
                 "schema": {
@@ -2171,7 +2171,7 @@
             }
           },
           "403": {
-            "description": "Tag is administered by Strand and cannot be set via the API",
+            "description": "Tag is administered by Strand AI and cannot be set via the API",
             "content": {
               "application/json": {
                 "schema": {
