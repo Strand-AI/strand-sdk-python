@@ -21,6 +21,7 @@ from ._errors import (
     AuthError,
     BadRequestError,
     InsufficientCreditsError,
+    MarkerNotAvailableError,
     NotFoundError,
     StrandError,
     UnknownMarkerError,
@@ -192,6 +193,21 @@ class HttpSession:
             raise InsufficientCreditsError(
                 message,
                 required=int(required) if isinstance(required, int) else None,
+                body=body,
+            )
+        if resp.status_code == 403 and error_code == "marker_not_available" and isinstance(body, dict):
+            unavailable_raw = body.get("unavailableMarkers")
+            unavailable = (
+                [str(m) for m in unavailable_raw] if isinstance(unavailable_raw, list) else []
+            )
+            available_raw = body.get("availableMarkers")
+            available = (
+                [str(m) for m in available_raw] if isinstance(available_raw, list) else None
+            )
+            raise MarkerNotAvailableError(
+                message,
+                unavailable=unavailable,
+                available=available,
                 body=body,
             )
         if resp.status_code == 404:

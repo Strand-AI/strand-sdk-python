@@ -14,6 +14,7 @@ Command map:
 CLI command             SDK call
 ======================  ====================================================
 ``strand upload``       ``client.uploads.upload_file(...)``
+``strand markers``      ``client.markers.list()``
 ``strand predict``      ``client.predict.submit(...)``
 ``strand status``       ``client.jobs.get(...).status``
 ``strand results``      ``client.jobs.get(...).download_results(dir)``
@@ -221,6 +222,18 @@ def results(
         job = client.jobs.get(job_id)
         written = job.download_results(str(out))
         _emit({"path": str(written)})
+    except StrandError as exc:
+        _fail(str(exc))
+    finally:
+        client.close()
+
+
+@app.command()
+def markers() -> None:
+    """List the markers your account can request (credit-free)."""
+    client = _client()
+    try:
+        _emit(client.markers.list())
     except StrandError as exc:
         _fail(str(exc))
     finally:

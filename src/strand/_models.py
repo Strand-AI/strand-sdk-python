@@ -133,6 +133,48 @@ class Upload:
 
 
 @dataclass(frozen=True, slots=True)
+class Marker:
+    """One entry in the account's marker catalog (`client.markers.list()`)."""
+
+    name: str
+    public_panel: bool
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> Marker:
+        return cls(name=str(raw["name"]), public_panel=bool(raw.get("publicPanel", False)))
+
+
+@dataclass(frozen=True, slots=True)
+class MarkerList:
+    """The entitlement-scoped set of markers this account may request.
+
+    `markers` is exactly what predict/estimate will accept: a self-signup
+    account sees the public panel; a full-panel account sees the whole vocab.
+    `full_panel` reports whether this account holds the full-panel entitlement.
+    Iterable over the `Marker` entries; `names` gives the bare marker strings.
+    """
+
+    full_panel: bool
+    markers: list[Marker]
+
+    @property
+    def names(self) -> list[str]:
+        return [m.name for m in self.markers]
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        return iter(self.markers)
+
+    def __len__(self) -> int:
+        return len(self.markers)
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> MarkerList:
+        entries = raw.get("markers")
+        markers = [Marker._from_dict(m) for m in entries] if isinstance(entries, list) else []
+        return cls(full_panel=bool(raw.get("fullPanel", False)), markers=markers)
+
+
+@dataclass(frozen=True, slots=True)
 class Estimate:
     patch_count: int
     marker_count: int

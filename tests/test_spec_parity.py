@@ -28,6 +28,7 @@ from typing import Any
 
 from strand._client import _JobsNamespace
 from strand._jobs import Job
+from strand._markers import Markers
 from strand._predict import Predict
 from strand._public import PublicSample, PublicSamples
 from strand._results import JobResults
@@ -64,6 +65,7 @@ SPEC_COVERAGE: dict[str, tuple[Any, dict[str, str]]] = {
     ),
     "GET /uploads/{id}": (Uploads.get, {"id": "upload_id"}),
     "POST /uploads/{id}/complete": (Uploads.upload_file, {"id": DERIVED}),
+    "GET /markers": (Markers.list, {}),
     "POST /predict/estimate": (Predict.estimate, {"uploadId": "upload_id", "markers": "markers"}),
     "POST /predict": (
         Predict.submit,

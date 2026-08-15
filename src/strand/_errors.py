@@ -71,6 +71,29 @@ class UnknownMarkerError(BadRequestError):
         self.known_subset = known_subset
 
 
+class MarkerNotAvailableError(StrandError):
+    """403 — one or more requested markers aren't available on this account.
+
+    The full marker panel is an entitlement (contracted partners under
+    agreement); self-signup accounts may request only the public panel.
+    `unavailable` is the list of requested markers the server rejected;
+    `available` is the account's allowed marker set when the server provides it
+    (may be `None`). No full-panel enumeration is exposed to gated accounts.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        unavailable: list[str],
+        available: list[str] | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message, status_code=403, error_code="marker_not_available", body=body)
+        self.unavailable = unavailable
+        self.available = available
+
+
 class NotFoundError(StrandError):
     """404 — referenced resource (upload, job, file) does not exist or isn't accessible."""
 

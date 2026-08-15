@@ -33,15 +33,19 @@ from ._errors import (
     InsufficientCreditsError,
     JobFailedError,
     JobTimeoutError,
+    MarkerNotAvailableError,
     NotFoundError,
     StrandError,
     UnknownMarkerError,
     UploadError,
 )
 from ._jobs import Job, JobEvent
+from ._markers import Markers
 from ._models import (
     Estimate,
     JobStatus,
+    Marker,
+    MarkerList,
     OmeTiffExport,
     PredictResult,
     PublicSampleGeometry,
@@ -69,6 +73,10 @@ __all__ = [
     "JobResults",
     "JobStatus",
     "JobTimeoutError",
+    "Marker",
+    "MarkerList",
+    "MarkerNotAvailableError",
+    "Markers",
     "ModelId",
     "NotFoundError",
     "OmeTiffExport",

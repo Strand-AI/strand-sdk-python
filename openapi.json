@@ -231,6 +231,44 @@
           }
         }
       },
+      "MarkerList": {
+        "type": "object",
+        "required": [
+          "fullPanel",
+          "count",
+          "markers"
+        ],
+        "properties": {
+          "fullPanel": {
+            "type": "boolean",
+            "description": "Whether this account is entitled to the full marker panel. `false` = the public panel only."
+          },
+          "count": {
+            "type": "integer",
+            "description": "Number of markers in `markers`."
+          },
+          "markers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "publicPanel"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Marker name to pass to predict/estimate."
+                },
+                "publicPanel": {
+                  "type": "boolean",
+                  "description": "Whether this marker is part of the public panel."
+                }
+              }
+            }
+          }
+        }
+      },
       "Job": {
         "type": "object",
         "required": [
@@ -1053,6 +1091,34 @@
         }
       }
     },
+    "/markers": {
+      "get": {
+        "summary": "List available markers",
+        "description": "The entitlement-scoped catalog of markers this account may request. Credit-free. The list equals exactly what predict/estimate will accept: a self-signup account sees the public panel; a full-panel account sees the whole vocab. Use it to discover valid marker names upfront instead of trial-and-error against a 400.",
+        "responses": {
+          "200": {
+            "description": "The account's available markers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarkerList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/predict/estimate": {
       "post": {
         "summary": "Estimate credit cost for a prediction",
@@ -1096,6 +1162,16 @@
           },
           "401": {
             "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "One or more requested markers are outside this account's panel (`marker_not_available`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1180,6 +1256,16 @@
           },
           "402": {
             "description": "Insufficient credits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "One or more requested markers are outside this account's panel (`marker_not_available`).",
             "content": {
               "application/json": {
                 "schema": {

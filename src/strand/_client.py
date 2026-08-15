@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from ._http import DEFAULT_TIMEOUT, HttpSession
+from ._markers import Markers
 from ._predict import Predict
 from ._public import PublicSamples
 from ._samples import Samples
@@ -97,6 +98,7 @@ class Client:
         self.jobs = _JobsNamespace(self)
         self.samples = Samples(self._http)
         self.public = PublicSamples(self._http)
+        self.markers = Markers(self._http)
 
     @property
     def base_url(self) -> str:
