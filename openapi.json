@@ -960,7 +960,7 @@
       },
       "post": {
         "summary": "Initiate a resumable upload",
-        "description": "Creates an organization-bound GCS resumable session. PUT the declared bytes to `uploadUrl`; when GCS finalizes the object, the platform automatically starts de-identification and preprocessing. There is no client finalize call. Poll `GET /uploads/{id}` until the sample leaves `uploading`.",
+        "description": "Creates an organization-bound GCS resumable session for an already-de-identified slide. PUT the declared bytes to `uploadUrl`; when GCS finalizes the object, the platform automatically starts ingest preprocessing. Optional defense-in-depth de-identification runs only when enabled for the organization. There is no client finalize call. Poll `GET /uploads/{id}` until the sample leaves `uploading`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2326,9 +2326,10 @@
             "schema": {
               "type": "string",
               "minLength": 1,
-              "pattern": "^[^,]+$"
+              "maxLength": 50,
+              "pattern": "^[^,\\u0000-\\u001F\\u007F]+$"
             },
-            "description": "Exact tag filter, normalized by trimming and lowercasing."
+            "description": "Exact tag filter, normalized by trimming and lowercasing. Control characters and commas are rejected."
           }
         ],
         "responses": {

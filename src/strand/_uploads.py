@@ -157,9 +157,12 @@ class Uploads:
         This is step 1 of the resumable flow WITHOUT the byte stream: it mints
         the session and returns an `Upload` whose `upload_url` is the resumable
         target the caller PUTs the slide bytes to directly, plus `id` (the
-        `upload_id`). After the bytes land, GCS automatically starts
-        de-identification + preprocessing. Poll `get(upload_id)` until the
-        status leaves `uploading`. Contrast with `upload_file`, which streams
+        `upload_id`). The caller must supply an already-de-identified slide.
+        After the bytes land, GCS automatically starts ingest preprocessing;
+        optional defense-in-depth de-identification runs only when enabled for
+        the organization.
+        Poll `get(upload_id)` until the status leaves `uploading`. Contrast with
+        `upload_file`, which streams
         a local path and performs that short ingest-start wait in one call.
 
         The session (and the object key it writes to) is bound to the calling
@@ -210,7 +213,8 @@ class Uploads:
         this method polls the upload resource until that event is accepted.
 
         Args:
-            path: Local file to upload.
+            path: Local, already-de-identified slide file to upload. Do not upload PHI
+                or other regulated identifiable health information.
             content_type: Override the auto-detected MIME type.
             chunk_size: Bytes per PUT request. Must be a positive multiple of 256 KiB
                 except for the last chunk. Defaults to 8 MiB.
@@ -235,8 +239,8 @@ class Uploads:
         Returns:
             `Upload` after the storage event has advanced it beyond `uploading`
             (normally `deid_running`, `preprocessing`, or `ready`). Dimensions
-            may still be absent while de-identification/preprocessing runs.
-            When `if_not_exists=True` and the server reports a dedup hit, the
+            may still be absent while ingest preprocessing runs. When
+            `if_not_exists=True` and the server reports a dedup hit, the
             existing row is returned as-is.
 
         Raises:
