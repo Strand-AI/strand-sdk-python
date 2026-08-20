@@ -106,31 +106,6 @@ class Upload:
             created_at=_parse_dt(raw.get("createdAt")),
         )
 
-    def _with_completion(self, raw: dict[str, Any]) -> Upload:
-        """Fold a POST /uploads/{id}/complete response into this Upload.
-
-        Slide dimensions are *not* part of this response. Completion now only
-        hands the sample to de-identification — the WSI is still in the
-        quarantine bucket, and level-0 dimensions are read later, off the
-        de-identified copy, before the sample reaches `ready`. So `widthPx` /
-        `heightPx` are absent here and stay None until a subsequent
-        `uploads.get(...)`.
-
-        Everything is read defensively: a completion that raced ahead of us
-        (`skipped: true`) echoes only `uploadId` and `status`.
-        """
-        return Upload(
-            id=self.id,
-            upload_url=self.upload_url,
-            gcs_path=self.gcs_path,
-            filename=self.filename,
-            file_size=self.file_size,
-            width_px=int(raw["widthPx"]) if isinstance(raw.get("widthPx"), int) else None,
-            height_px=int(raw["heightPx"]) if isinstance(raw.get("heightPx"), int) else None,
-            status=str(raw["status"]) if raw.get("status") is not None else None,
-            auto_segment=self.auto_segment,
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class Marker:
@@ -148,7 +123,7 @@ class Marker:
 class MarkerList:
     """The entitlement-scoped set of markers this account may request.
 
-    `markers` is exactly what predict/estimate will accept: a self-signup
+    `markers` is exactly what prediction submission will accept: a self-signup
     account sees the public panel; a full-panel account sees the whole vocab.
     `full_panel` reports whether this account holds the full-panel entitlement.
     Iterable over the `Marker` entries; `names` gives the bare marker strings.
@@ -194,14 +169,132 @@ class Estimate:
 
 
 @dataclass(frozen=True, slots=True)
+class MineSampleSummary:
+    """An owned sample in a scoped `client.samples.list()` result."""
+
+    ownership: Literal["mine"]
+    id: str
+    name: str | None
+    filename: str
+    status: str
+    file_size: int
+    tags: list[str]
+    created_at: datetime | None
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> MineSampleSummary:
+        return cls(
+            ownership="mine",
+            id=str(raw["id"]),
+            name=str(raw["name"]) if raw.get("name") is not None else None,
+            filename=str(raw["filename"]),
+            status=str(raw["status"]),
+            file_size=int(raw["fileSize"]),
+            tags=[str(tag) for tag in raw.get("tags", [])],
+            created_at=_parse_dt(raw.get("createdAt")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PublicSampleSummary:
+    """A public sample in a scoped `client.samples.list()` result."""
+
+    ownership: Literal["public"]
+    id: str
+    title: str
+    thumbnail_url: str
+    tags: list[str]
+    metadata: dict[str, Any]
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> PublicSampleSummary:
+        return cls(
+            ownership="public",
+            id=str(raw["id"]),
+            title=str(raw["title"]),
+            thumbnail_url=str(raw["thumbnailUrl"]),
+            tags=[str(tag) for tag in raw.get("tags", [])],
+            metadata=dict(raw.get("metadata") or {}),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SampleList:
+    """A cursor-paginated page of owned and/or public samples."""
+
+    items: list[MineSampleSummary | PublicSampleSummary]
+    next_cursor: str | None
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> SampleList:
+        items: list[MineSampleSummary | PublicSampleSummary] = []
+        for item in raw.get("items", []):
+            ownership = item.get("ownership")
+            if ownership == "mine":
+                items.append(MineSampleSummary._from_dict(item))
+            elif ownership == "public":
+                items.append(PublicSampleSummary._from_dict(item))
+            else:
+                raise ValueError(f"Unknown sample ownership discriminator: {ownership!r}")
+        cursor = raw.get("nextCursor")
+        return cls(items=items, next_cursor=str(cursor) if cursor is not None else None)
+
+
+@dataclass(frozen=True, slots=True)
+class SampleJob:
+    """A prediction job included in an owned sample's history."""
+
+    id: str
+    status: str
+    progress: float | None
+    reserved_credits: int | None
+    markers: list[str]
+    created_at: datetime | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    error_message: str | None
+    results_available: bool
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> SampleJob:
+        return cls(
+            id=str(raw["id"]),
+            status=str(raw["status"]),
+            progress=(
+                float(raw["progress"])
+                if isinstance(raw.get("progress"), (int, float))
+                else None
+            ),
+            reserved_credits=(
+                int(raw["reservedCredits"])
+                if isinstance(raw.get("reservedCredits"), int)
+                else None
+            ),
+            markers=[str(marker) for marker in raw.get("markers", [])],
+            created_at=_parse_dt(raw.get("createdAt")),
+            started_at=_parse_dt(raw.get("startedAt")),
+            completed_at=_parse_dt(raw.get("completedAt")),
+            error_message=(
+                str(raw["errorMessage"]) if raw.get("errorMessage") is not None else None
+            ),
+            results_available=bool(raw.get("resultsAvailable")),
+        )
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in {"completed", "partial_failed", "failed", "cancelled"}
+
+
+@dataclass(frozen=True, slots=True)
 class Sample:
-    """A sample's curated read model, from `client.samples.get(sample_id)`.
+    """An owned sample's detail, from `client.samples.get(sample_id)`.
 
     Expiration is a field group on the sample — `will_expire` is `False` only
     when the sample never expires (a `custom` pin, or an org with no default
     policy), in which case `expires_at` and `expires_in_days` are `None`.
 
     Attributes:
+        ownership: Literal discriminator, always `"mine"` for this branch.
         id: Sample UUID.
         name: Human-friendly display name, or `None` if unset.
         filename: Original uploaded filename.
@@ -223,8 +316,12 @@ class Sample:
         will_expire: True when the sample has an expiration date set.
         trashed_at: When the sample entered Trash, or `None` if still active.
             Trashed samples are permanently deleted 7 days after this time.
+        jobs: Up to the 50 newest prediction jobs for this sample.
+        job_count: Total matching prediction jobs, including entries beyond
+            the bounded `jobs` list.
     """
 
+    ownership: Literal["mine"]
     id: str
     name: str | None
     filename: str
@@ -240,6 +337,8 @@ class Sample:
     expires_in_days: int | None
     will_expire: bool
     trashed_at: datetime | None
+    jobs: list[SampleJob]
+    job_count: int
 
     @classmethod
     def _from_dict(cls, raw: dict[str, Any]) -> Sample:
@@ -252,6 +351,7 @@ class Sample:
         mpp = float(mpp_raw) if isinstance(mpp_raw, (int, float)) else None
         days_raw = raw.get("expiresInDays")
         return cls(
+            ownership="mine",
             id=str(raw["id"]),
             name=raw.get("name"),
             filename=str(raw["filename"]),
@@ -267,6 +367,8 @@ class Sample:
             expires_in_days=int(days_raw) if isinstance(days_raw, int) else None,
             will_expire=bool(raw.get("willExpire")),
             trashed_at=_parse_dt(raw.get("trashedAt")),
+            jobs=[SampleJob._from_dict(job) for job in raw["jobs"]],
+            job_count=int(raw["jobCount"]),
         )
 
 
@@ -377,80 +479,6 @@ class ResultArchiveExport:
 
 
 @dataclass(frozen=True, slots=True)
-class UploadCompletion:
-    """Result of `client.uploads.complete(upload_id)` — the finalize step that
-    hands a resumable-session upload to de-identification + preprocessing.
-
-    `skipped` is True when the sample had already left the `uploading` state
-    (a concurrent or repeated finalize), which makes the call idempotent.
-    """
-
-    upload_id: str
-    status: str | None
-    skipped: bool
-    warning: str | None
-
-    @classmethod
-    def _from_dict(cls, raw: dict[str, Any]) -> UploadCompletion:
-        return cls(
-            upload_id=str(raw["uploadId"]),
-            status=str(raw["status"]) if raw.get("status") is not None else None,
-            skipped=bool(raw.get("skipped")),
-            warning=str(raw["warning"]) if raw.get("warning") is not None else None,
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class PublicSampleSummary:
-    """A card in the public-cohort listing (`client.public.list()`).
-
-    Attributes:
-        public_id: Stable public id — pass to `client.public.get(...)`.
-        title: Display title.
-        thumbnail_url: API-relative path to the JPEG thumbnail byte endpoint.
-        tags: Public display tags (cohort/site labels), sorted.
-        metadata: Public-visible key/value metadata curated for the sample.
-    """
-
-    public_id: str
-    title: str
-    thumbnail_url: str
-    tags: list[str]
-    metadata: dict[str, Any]
-
-    @classmethod
-    def _from_dict(cls, raw: dict[str, Any]) -> PublicSampleSummary:
-        return cls(
-            public_id=str(raw["publicId"]),
-            title=str(raw.get("title", "")),
-            thumbnail_url=str(raw.get("thumbnailUrl", "")),
-            tags=[str(t) for t in raw.get("tags", [])],
-            metadata=dict(raw.get("metadata") or {}),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class PublicSampleList:
-    """One page of the curated public cohort (`client.public.list()`)."""
-
-    items: list[PublicSampleSummary]
-    page: int
-    page_size: int
-    total_count: int
-    total_pages: int
-
-    @classmethod
-    def _from_dict(cls, raw: dict[str, Any]) -> PublicSampleList:
-        return cls(
-            items=[PublicSampleSummary._from_dict(i) for i in raw.get("items", [])],
-            page=int(raw.get("page", 1)),
-            page_size=int(raw.get("pageSize", 0)),
-            total_count=int(raw.get("totalCount", 0)),
-            total_pages=int(raw.get("totalPages", 0)),
-        )
-
-
-@dataclass(frozen=True, slots=True)
 class PublicSampleGeometry:
     """Level-0 dimensions and microns-per-pixel of a public sample's H&E image."""
 
@@ -487,12 +515,10 @@ class PredictResult:
             `JobFailedError` before this is built.
         credits_used: Credits the platform reserved for the job.
         model: Canonical Lattice version that served the request (e.g.
-            `"v0.7"`). Always a v0.X label — even when the caller passed
-            a legacy alias like `"v10-fullpanel-v2"` on input, the platform
-            normalizes before persisting and the response echoes the
-            canonical name. `None` for backwards-compatibility with older
-            servers that didn't populate the field; new deploys always set
-            it. See `infra/notes/postman-versioning-2026-06.md` §4.
+            `"v0.7"`). The platform echoes the selected canonical name.
+            Legacy `v10*` aliases are invalid inputs. `None` supports
+            historical responses that predate the field; current responses
+            always include it.
         marker_outputs: When `output_dir` was provided, maps each predicted
             marker name to its local subdirectory under `output_dir/markers/`.
             Empty dict otherwise — call `.results.to_anndata()` or

@@ -1,42 +1,47 @@
-"""Samples namespace — physical scale, expiration overrides, restore, tags.
+"""Scoped sample reads and owned-sample mutations.
 
-Exposed as `client.samples` (Phase 2). Mirrors the REST endpoints:
-
-    PATCH  /api/v1/samples/{id}/expiration
-    PATCH  /api/v1/samples/expiration         (bulk)
-    PATCH  /api/v1/samples/{id}/mpp
-    POST   /api/v1/samples/{id}/restore
-    GET    /api/v1/samples/{id}/tags
-    POST   /api/v1/samples/{id}/tags
-    DELETE /api/v1/samples/{id}/tags
-
-The expiration modes are mutually exclusive — the SDK validates this client-
-side so misuse raises a clear `ValueError` before the round-trip.
+Exposed as `client.samples`. The unified read surface resolves owned sample ids
+and public share ids, while mutations remain restricted to owned samples.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from math import isfinite
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
-from ._models import Sample
+from ._models import Sample, SampleList
+from ._public import PublicSample
 
 if TYPE_CHECKING:
     from ._http import HttpSession
 
 
+SampleScope = Literal["mine", "public", "all"]
+_VALID_SCOPES = frozenset({"mine", "public", "all"})
+
+
+class UnsetType:
+    """Type of `UNSET`, used to distinguish omitted patch fields from null."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "UNSET"
+
+
+UNSET = UnsetType()
+
+
 def _format_expires_at(value: datetime | str | None) -> str | None:
-    """Normalize to ISO 8601 UTC. Pass-through for already-stringified values."""
+    """Normalize to ISO 8601 UTC. Pass through already-stringified values."""
     if value is None:
         return None
     if isinstance(value, str):
         return value
     if value.tzinfo is None:
-        # Naive datetime — treat as UTC. We surface this convention in the
-        # docstrings; coercing here avoids the surprising "off by hours"
-        # result you'd otherwise get from .isoformat() with a naive value.
+        # Naive datetime values use UTC, matching the existing SDK convention.
         value = value.replace(tzinfo=UTC)
     return value.isoformat()
 
@@ -67,48 +72,70 @@ def _build_payload(
 
 
 class Samples:
-    """`client.samples` namespace (Phase 2)."""
+    """Scoped reads and owned-sample mutations exposed on `client.samples`."""
 
     def __init__(self, http: HttpSession) -> None:
         self._http = http
 
-    def set_mpp(self, sample_id: str, mpp: float) -> dict[str, Any]:
-        """Set the user-reported physical pixel size for a sample.
+    def list(
+        self,
+        *,
+        scope: SampleScope = "mine",
+        limit: int = 48,
+        cursor: str | None = None,
+        tag: str | None = None,
+    ) -> SampleList:
+        """List owned samples, public samples, or both using cursor pagination.
 
-        The value is measured in microns per pixel at the slide's base level.
-        Slides are isotropic: a single value governs both axes. It takes
-        precedence over embedded slide metadata for subsequent inference jobs.
-
-        Args:
-            sample_id: UUID of the sample or completed upload.
-            mpp: Microns per pixel, greater than 0 and at most 100.
-
-        Returns:
-            Server payload with `id` and the persisted scalar `mpp`.
+        `scope` is validated locally and always sent. Pagination and tag inputs
+        remain server-validated.
         """
-        value = _validate_mpp(mpp, "mpp")
-        return self._http.request_json("PATCH", f"/samples/{sample_id}/mpp", json={"mpp": value})
+        if not isinstance(scope, str) or scope not in _VALID_SCOPES:
+            raise ValueError("scope must be exactly one of: mine, public, all")
+        params: dict[str, Any] = {"scope": scope, "limit": limit}
+        if cursor is not None:
+            params["cursor"] = cursor
+        if tag is not None:
+            params["tag"] = tag
+        payload = self._http.request_json("GET", "/samples", params=params)
+        return SampleList._from_dict(payload)
 
-    def get(self, sample_id: str) -> Sample:
-        """Fetch a sample's curated resource.
-
-        Returns the sample's identity, status, physical scale, tags, and its
-        current expiration as one typed model — the read-only way to check
-        when a sample expires (via `.will_expire` / `.expires_in_days` /
-        `.expires_at`) before it moves to Trash, without the mutation that
-        `set_expiration` requires. Any API key whose org owns the sample can
-        read it.
-
-        Args:
-            sample_id: UUID of the sample.
-
-        Returns:
-            A `Sample` with parsed `created_at` / `expires_at` datetimes.
-
-        Raises:
-            NotFoundError: No such sample in this API key's organization.
-        """
+    def get(self, sample_id: str) -> Sample | PublicSample:
+        """Fetch owned detail with job history or public detail by canonical id."""
         payload = self._http.request_json("GET", f"/samples/{sample_id}")
+        ownership = payload.get("ownership")
+        if ownership == "mine":
+            return Sample._from_dict(payload)
+        if ownership == "public":
+            return PublicSample._from_dict(self._http, payload)
+        raise ValueError(f"Unknown sample ownership discriminator: {ownership!r}")
+
+    def patch(
+        self,
+        sample_id: str,
+        *,
+        name: str | UnsetType | None = UNSET,
+        tags: Sequence[str] | UnsetType = UNSET,
+        mpp: float | UnsetType = UNSET,
+    ) -> Sample:
+        """Patch an owned sample's name, complete tag set, and/or physical scale.
+
+        `name=None` clears the display name. `tags` has set semantics, so pass
+        the complete desired tag set; `tags=[]` clears user-editable tags.
+        Fields left as `UNSET` are omitted from the request.
+        """
+        if name is UNSET and tags is UNSET and mpp is UNSET:
+            raise ValueError("Provide at least one of: name, tags, or mpp")
+        body: dict[str, Any] = {}
+        if name is not UNSET:
+            body["name"] = name
+        if tags is not UNSET:
+            if isinstance(tags, str):
+                raise ValueError("tags must be a sequence of tag strings, not a string")
+            body["tags"] = list(cast(Sequence[str], tags))
+        if mpp is not UNSET:
+            body["mpp"] = _validate_mpp(cast(float, mpp), "mpp")
+        payload = self._http.request_json("PATCH", f"/samples/{sample_id}", json=body)
         return Sample._from_dict(payload)
 
     def set_expiration(
@@ -123,20 +150,9 @@ class Samples:
         """Set expiration on a single sample.
 
         Exactly one of `expires_at`, `never_expire=True`, or
-        `use_org_default=True`. Custom expirations (date or never) survive
-        future org-policy changes; `use_org_default=True` clears the custom
-        expiration. A naive datetime is treated as UTC.
-
-        Args:
-            sample_id: UUID of the sample.
-            expires_at: Custom expiration as a `datetime` or ISO 8601 string.
-            never_expire: Set the sample to never expire (custom).
-            use_org_default: Clear custom expiration; follow org policy.
-            reason: Optional governance reason (10-500 chars).
-
-        Returns:
-            Server's updated sample payload (`id`, `expiresAt`, `expiresAtSource`,
-            `retentionChangedAt`, `retentionChangedBy`, `batchId`).
+        `use_org_default=True`. Custom expirations survive future org-policy
+        changes; `use_org_default=True` clears the custom expiration. A naive
+        datetime is treated as UTC.
         """
         body = _build_payload(
             expires_at=expires_at,
@@ -155,95 +171,26 @@ class Samples:
         use_org_default: bool = False,
         reason: str | None = None,
     ) -> dict[str, Any]:
-        """Set expiration on a batch of samples (max 500).
+        """Set expiration on up to 500 samples as one all-or-nothing batch.
 
-        All-or-nothing: if any sample fails the permission gate (caller isn't
-        the sample creator, an org owner/admin, or a Strand admin), no rows
-        are touched.
-
-        Returns:
-            `{ "updated": N, "batchId": "<uuid>" }`.
+        If any sample fails the permission gate, no rows are changed.
         """
-        ids = list(sample_ids)
         body = _build_payload(
             expires_at=expires_at,
             never_expire=never_expire,
             use_org_default=use_org_default,
             reason=reason,
         )
-        body["sampleIds"] = ids
+        body["sampleIds"] = list(sample_ids)
         return self._http.request_json("PATCH", "/samples/expiration", json=body)
 
     def restore(self, sample_id: str) -> dict[str, Any]:
-        """Restore a sample from Trash.
+        """Restore a sample during its seven-day Trash window.
 
-        Available within the 7-day Trash window. Brings the sample back to
-        the active list and extends its expiration so it isn't immediately
-        re-trashed. Caller must have the same permissions required for
-        `set_expiration`.
+        The sample returns to the active list and its expiration is extended so
+        it is not immediately re-trashed.
         """
         return self._http.request_json("POST", f"/samples/{sample_id}/restore")
-
-    def list_tags(self, sample_id: str) -> list[dict[str, Any]]:
-        """List a sample's tags, sorted alphabetically.
-
-        Args:
-            sample_id: UUID of the sample.
-
-        Returns:
-            A list of `{"tag": ..., "createdAt": ...}` entries. Empty if the
-            sample has no tags.
-        """
-        payload = self._http.request_json("GET", f"/samples/{sample_id}/tags")
-        return cast("list[dict[str, Any]]", payload.get("tags", []))
-
-    def add_tag(self, sample_id: str, tag: str) -> dict[str, Any]:
-        """Attach a free-form, org-scoped tag to a sample.
-
-        Tags are cohort/site/status labels — the same ones the dashboard
-        shows. They are normalized server-side (trimmed and lowercased), so
-        `"HistoWiz"` and `"histowiz"` are the same tag.
-
-        Idempotent: re-adding a tag the sample already has succeeds and
-        returns `created=False` rather than raising, so a re-run of a
-        pipeline doesn't need to special-case it.
-
-        Args:
-            sample_id: UUID of the sample.
-            tag: Label to apply. At most 50 characters once normalized, and
-                may not contain a comma (the samples list uses commas as its
-                filter delimiter).
-
-        Returns:
-            `{"tag": ..., "createdAt": ..., "created": bool}`.
-
-        Raises:
-            NotFoundError: No such sample in this API key's organization.
-            StrandError: The tag failed validation (HTTP 422), or is one
-                Strand administers and clients may not set (HTTP 403). The
-                client does not map either status to a narrower class.
-        """
-        return self._http.request_json(
-            "POST", f"/samples/{sample_id}/tags", json={"tag": tag}
-        )
-
-    def remove_tag(self, sample_id: str, tag: str) -> bool:
-        """Remove a tag from a sample.
-
-        Removing a tag that isn't present is not an error — the return value
-        distinguishes the two cases.
-
-        Args:
-            sample_id: UUID of the sample.
-            tag: Label to remove. Normalized the same way as on write.
-
-        Returns:
-            True if a tag was removed, False if it wasn't there.
-        """
-        payload = self._http.request_json(
-            "DELETE", f"/samples/{sample_id}/tags", params={"tag": tag}
-        )
-        return bool(payload.get("removed", False))
 
 
 def _validate_mpp(value: float, name: str) -> float:

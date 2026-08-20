@@ -46,22 +46,25 @@ from ._models import (
     JobStatus,
     Marker,
     MarkerList,
+    MineSampleSummary,
     OmeTiffExport,
     PredictResult,
     PublicSampleGeometry,
-    PublicSampleList,
     PublicSampleSummary,
     ResultArchiveExport,
     Sample,
+    SampleJob,
+    SampleList,
     Upload,
-    UploadCompletion,
 )
 from ._predict import ModelId
-from ._public import PublicSample, PublicSamples
+from ._public import PublicSample
 from ._results import JobResults
+from ._samples import UNSET, SampleScope
 from ._uploads import UploadList
 
 __all__ = [
+    "UNSET",
     "AuthError",
     "BadRequestError",
     "Client",
@@ -77,21 +80,22 @@ __all__ = [
     "MarkerList",
     "MarkerNotAvailableError",
     "Markers",
+    "MineSampleSummary",
     "ModelId",
     "NotFoundError",
     "OmeTiffExport",
     "PredictResult",
     "PublicSample",
     "PublicSampleGeometry",
-    "PublicSampleList",
     "PublicSampleSummary",
-    "PublicSamples",
     "ResultArchiveExport",
     "Sample",
+    "SampleJob",
+    "SampleList",
+    "SampleScope",
     "StrandError",
     "UnknownMarkerError",
     "Upload",
-    "UploadCompletion",
     "UploadError",
     "UploadList",
 ]

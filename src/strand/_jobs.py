@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
-from httpx_sse import EventSource, SSEError
 
 from ._errors import JobFailedError, JobTimeoutError, StrandError
 from ._models import JobStatus, OmeTiffExport, ResultArchiveExport
@@ -25,6 +24,42 @@ if TYPE_CHECKING:
 # coverage to see what landed. `completed` always means every requested marker
 # delivered.
 TERMINAL_STATUSES = frozenset({"completed", "partial_failed", "failed", "cancelled"})
+
+
+def _iter_sse_messages(
+    lines: Iterator[str],
+    *,
+    on_activity: Callable[[], None] | None = None,
+) -> Iterator[tuple[str, str]]:
+    """Decode SSE fields while exposing every line, including heartbeats.
+
+    ``httpx-sse`` intentionally hides comment heartbeats. A wait deadline must
+    still be checked on those lines, so the job wait path uses this small SSE
+    field decoder and calls ``on_activity`` before discarding any comment.
+    """
+    event = ""
+    data: list[str] = []
+    for raw_line in lines:
+        if on_activity is not None:
+            on_activity()
+        line = raw_line.rstrip("\r")
+        if not line:
+            if data:
+                yield event, "\n".join(data)
+            event = ""
+            data = []
+            continue
+        if line.startswith(":"):
+            continue
+        field, separator, value = line.partition(":")
+        if not separator:
+            value = ""
+        elif value.startswith(" "):
+            value = value[1:]
+        if field == "event":
+            event = value
+        elif field == "data":
+            data.append(value)
 
 
 @dataclass
@@ -110,36 +145,53 @@ class Job:
     def stream_events(self) -> Iterator[JobEvent]:
         """Yield `JobEvent`s as the server emits them.
 
-        The generator closes when the job reaches a terminal status. The platform
-        emits `: keep-alive` heartbeats; httpx-sse filters those out.
+        The generator closes when the job reaches a terminal status.
         """
-        resp = self._http.stream_response("GET", f"/jobs/{self.id}/stream")
+        yield from self._stream_events(deadline=None, read_timeout=None)
+
+    def _stream_events(
+        self,
+        *,
+        deadline: float | None,
+        read_timeout: float | None,
+    ) -> Iterator[JobEvent]:
+        """Internal stream with a wall-clock deadline for ``wait()``."""
+        resp = self._http.stream_response(
+            "GET",
+            f"/jobs/{self.id}/stream",
+            timeout=read_timeout,
+        )
+
+        def check_deadline() -> None:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise JobTimeoutError(f"Job {self.id} did not reach terminal status in time")
+
         try:
-            try:
-                event_source = EventSource(resp)
-                for sse in event_source.iter_sse():
-                    if sse.event and sse.event != "message":
-                        continue
-                    data = sse.data
-                    if not data:
-                        continue
-                    try:
-                        payload = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(payload, dict):
-                        continue
-                    if "error" in payload and "status" not in payload:
-                        raise StrandError(
-                            f"Server reported error in stream: {payload['error']}",
-                            body=payload,
-                        )
-                    event = JobEvent._from_payload(payload)
-                    yield event
-                    if event.is_terminal:
-                        return
-            except SSEError as exc:  # malformed stream → fall back to polling.
-                raise StrandError(f"Malformed SSE stream: {exc}") from exc
+            content_type = resp.headers.get("content-type", "").split(";", 1)[0].strip()
+            if content_type != "text/event-stream":
+                raise StrandError(
+                    f"Expected text/event-stream, got {content_type or 'no content type'}"
+                )
+            for event_name, data in _iter_sse_messages(
+                resp.iter_lines(), on_activity=check_deadline
+            ):
+                if event_name and event_name != "message":
+                    continue
+                try:
+                    payload = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                if "error" in payload and "status" not in payload:
+                    raise StrandError(
+                        f"Server reported error in stream: {payload['error']}",
+                        body=payload,
+                    )
+                event = JobEvent._from_payload(payload)
+                yield event
+                if event.is_terminal:
+                    return
         finally:
             resp.close()
 
@@ -178,11 +230,22 @@ class Job:
                 )
 
         if use_stream:
+            _check_deadline()
+            read_timeout = None
+            if deadline is not None:
+                read_timeout = max(0.001, deadline - time.monotonic())
             try:
-                for event in self.stream_events():
+                for event in self._stream_events(
+                    deadline=deadline,
+                    read_timeout=read_timeout,
+                ):
                     _check_deadline()
                     if event.is_terminal:
                         break
+            except JobTimeoutError:
+                raise JobTimeoutError(
+                    f"Job {self.id} did not reach terminal status within {timeout}s"
+                ) from None
             except (httpx.HTTPError, StrandError):
                 # Drop down to polling — possibly a transient disconnect.
                 pass
@@ -291,6 +354,11 @@ class Job:
         deadline = time.monotonic() + timeout if timeout is not None else None
         export = self.request_ome_tiff_export()
         while export.status != "ready":
+            if export.status == "failed":
+                raise StrandError(
+                    export.error or f"OME-TIFF export for job {self.id} failed",
+                    error_code="export_failed",
+                )
             if deadline is not None and time.monotonic() >= deadline:
                 raise JobTimeoutError(
                     f"OME-TIFF export for job {self.id} was not ready within {timeout}s",

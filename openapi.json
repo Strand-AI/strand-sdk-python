@@ -90,32 +90,6 @@
           }
         }
       },
-      "UploadComplete": {
-        "type": "object",
-        "description": "Completion hands the sample to de-identification; it does not return slide dimensions. The WSI is still in the quarantine bucket at this point, and level-0 dimensions are read later off the de-identified copy, before the sample reaches `ready`. Poll `GET /uploads/{id}` for `widthPx` / `heightPx`.",
-        "required": [
-          "uploadId",
-          "status"
-        ],
-        "properties": {
-          "uploadId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "status": {
-            "type": "string",
-            "description": "Sample status after the call — normally `deid_running`, or `deid_failed` if the de-identification job could not be scheduled. A duplicate call echoes whatever status the sample already had."
-          },
-          "skipped": {
-            "type": "boolean",
-            "description": "True when the sample had already moved past `uploading`, so this call was a no-op. Completion is idempotent."
-          },
-          "warning": {
-            "type": "string",
-            "description": "Present when the upload landed but de-identification could not be queued."
-          }
-        }
-      },
       "Upload": {
         "type": "object",
         "required": [
@@ -139,7 +113,7 @@
           },
           "status": {
             "type": "string",
-            "description": "uploading | deid_running | deid_failed | preprocessing | ready | preprocess_failed"
+            "description": "uploading | upload_failed | deid_running | deid_failed | preprocessing | ready | preprocess_failed"
           },
           "gcsPath": {
             "type": "string"
@@ -185,12 +159,20 @@
       "Estimate": {
         "type": "object",
         "required": [
+          "dryRun",
           "patchCount",
           "markerCount",
           "estimatedCredits",
-          "orgBalance"
+          "orgBalance",
+          "orgPending"
         ],
         "properties": {
+          "dryRun": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
           "patchCount": {
             "type": "integer"
           },
@@ -258,7 +240,7 @@
               "properties": {
                 "name": {
                   "type": "string",
-                  "description": "Marker name to pass to predict/estimate."
+                  "description": "Marker name to pass to predict."
                 },
                 "publicPanel": {
                   "type": "boolean",
@@ -269,12 +251,20 @@
           }
         }
       },
-      "Job": {
+      "SampleJob": {
         "type": "object",
+        "additionalProperties": false,
         "required": [
           "id",
           "status",
-          "markers"
+          "progress",
+          "reservedCredits",
+          "markers",
+          "createdAt",
+          "startedAt",
+          "completedAt",
+          "errorMessage",
+          "resultsAvailable"
         ],
         "properties": {
           "id": {
@@ -283,7 +273,7 @@
           },
           "status": {
             "type": "string",
-            "description": "Lifecycle: `queued` → `running` → `postprocessing` → terminal. Terminal values: `completed` (every requested marker delivered), `partial_failed` (some markers delivered and downloadable, the rest terminally failed after server-side retries — see per-marker coverage), `failed` (nothing delivered), `cancelled`."
+            "description": "Lifecycle: `queued` → `running` → `postprocessing` → terminal. Terminal values: `completed`, `partial_failed`, `failed`, and `cancelled`."
           },
           "progress": {
             "type": "number",
@@ -298,16 +288,6 @@
             "items": {
               "type": "string"
             }
-          },
-          "model": {
-            "type": "string",
-            "nullable": true,
-            "description": "Canonical Lattice version the job ran under (e.g. `\"v0.5\"`, `\"v0.7\"`). Always a `v0.X` label. Historical jobs may surface `\"v0.1\"` (the renumbered legacy 35-marker base — sunset; readable but not dispatchable). `null` only on very old rows that predate the field."
-          },
-          "metadata": {
-            "type": "object",
-            "nullable": true,
-            "description": "Free-form metadata attached to the job."
           },
           "createdAt": {
             "type": "string",
@@ -471,12 +451,27 @@
           }
         }
       },
-      "MppUpdate": {
+      "SamplePatch": {
         "type": "object",
-        "required": [
-          "mpp"
-        ],
+        "additionalProperties": false,
+        "minProperties": 1,
         "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 200,
+            "pattern": "^[^\\u0000]*$",
+            "description": "Trimmed display name. Null or an empty string reverts to filename. NUL characters are rejected."
+          },
+          "tags": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "type": "string",
+              "pattern": "^[^\\u0000]*$"
+            },
+            "description": "Complete desired tag set, with a transport-safety limit of 1,000 raw items. Each value is trimmed/lowercased, then must be 1–50 characters with no commas or NUL characters; duplicates collapse after normalization and at most 50 distinct normalized tags are allowed."
+          },
           "mpp": {
             "oneOf": [
               {
@@ -486,6 +481,7 @@
               },
               {
                 "type": "object",
+                "additionalProperties": false,
                 "required": [
                   "x",
                   "y"
@@ -504,24 +500,7 @@
                 }
               }
             ],
-            "description": "User-reported microns per pixel. Slides are isotropic: pass a number, or an { x, y } object whose axes are equal (anisotropic input is rejected)."
-          }
-        }
-      },
-      "MppUpdateResult": {
-        "type": "object",
-        "required": [
-          "id",
-          "mpp"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "mpp": {
-            "type": "number",
-            "description": "The persisted isotropic microns-per-pixel override."
+            "description": "User-reported microns per pixel. Object axes must be equal; anisotropic input is rejected."
           }
         }
       },
@@ -564,10 +543,12 @@
           }
         }
       },
-      "SampleResource": {
+      "OwnedSampleDetail": {
         "type": "object",
-        "description": "A sample's curated read model, returned by `GET /samples/{id}`. Expiration is a field group on it: `willExpire` is false only when the sample never expires (a `custom` pin, or an org with no default policy), in which case `expiresAt` and `expiresInDays` are null.",
+        "additionalProperties": false,
+        "description": "An owned sample's curated read model and its 50 newest inference jobs. `jobCount` is the uncapped total.",
         "required": [
+          "ownership",
           "id",
           "name",
           "filename",
@@ -582,9 +563,17 @@
           "expiresAtSource",
           "expiresInDays",
           "willExpire",
-          "trashedAt"
+          "trashedAt",
+          "jobs",
+          "jobCount"
         ],
         "properties": {
+          "ownership": {
+            "type": "string",
+            "enum": [
+              "mine"
+            ]
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -600,7 +589,7 @@
           },
           "status": {
             "type": "string",
-            "description": "Lifecycle status: `uploading`, `preprocessing`, `ready`, or `preprocess_failed`."
+            "description": "Lifecycle status: `uploading`, `upload_failed`, `deid_running`, `deid_failed`, `preprocessing`, `ready`, or `preprocess_failed`."
           },
           "fileSize": {
             "type": "string",
@@ -663,100 +652,159 @@
             "format": "date-time",
             "nullable": true,
             "description": "When the sample entered Trash, or null if it is still active. Trashed samples are permanently deleted 7 days after this time."
+          },
+          "jobs": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/SampleJob"
+            }
+          },
+          "jobCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total inference-job count for the sample before the 50-job cap."
           }
         }
       },
-      "SampleTag": {
+      "MineSampleListItem": {
         "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ownership",
+          "id",
+          "name",
+          "filename",
+          "status",
+          "fileSize",
+          "tags",
+          "createdAt"
+        ],
         "properties": {
-          "tag": {
+          "ownership": {
             "type": "string",
-            "description": "Canonical (trimmed, lowercased) tag value."
+            "enum": [
+              "mine"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Organization-authorized sample id."
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "filename": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "fileSize": {
+            "type": "string",
+            "description": "Decimal string for a 64-bit byte count."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "createdAt": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "nullable": true
           }
         }
       },
       "PublicSampleListItem": {
         "type": "object",
-        "description": "A card in the public cohort listing. `thumbnailUrl` is a v1-relative link to the authed thumbnail byte endpoint.",
+        "additionalProperties": false,
         "required": [
-          "publicId",
+          "ownership",
+          "id",
           "title",
           "thumbnailUrl",
           "tags",
           "metadata"
         ],
         "properties": {
-          "publicId": {
+          "ownership": {
+            "type": "string",
+            "enum": [
+              "public"
+            ]
+          },
+          "id": {
             "type": "string",
             "format": "uuid",
-            "description": "Stable public identifier for the release. Use it on the detail + byte endpoints."
+            "description": "Safe public share UUID. Never an internal sample id."
           },
           "title": {
-            "type": "string",
-            "description": "Display title for the public sample."
+            "type": "string"
           },
           "thumbnailUrl": {
             "type": "string",
-            "description": "v1-relative path to the sample's JPEG thumbnail (`GET /public/samples/{publicId}/thumbnail`)."
+            "description": "Authenticated v1 public thumbnail route."
           },
           "tags": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Public-visible display tags (cohort/site labels), sorted."
+            "description": "Sorted public-visible tags only."
           },
           "metadata": {
             "type": "object",
             "additionalProperties": true,
-            "description": "Public-visible key/value metadata curated for this sample."
+            "description": "Public-visible sample attributes only."
           }
         }
       },
-      "PublicSampleList": {
+      "SampleList": {
         "type": "object",
-        "description": "A page of the curated public cohort, newest-first.",
+        "additionalProperties": false,
         "required": [
           "items",
-          "page",
-          "pageSize",
-          "totalCount",
-          "totalPages"
+          "nextCursor"
         ],
         "properties": {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/PublicSampleListItem"
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/MineSampleListItem"
+                },
+                {
+                  "$ref": "#/components/schemas/PublicSampleListItem"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "ownership",
+                "mapping": {
+                  "mine": "#/components/schemas/MineSampleListItem",
+                  "public": "#/components/schemas/PublicSampleListItem"
+                }
+              }
             }
           },
-          "page": {
-            "type": "integer",
-            "description": "1-based page number of this response."
-          },
-          "pageSize": {
-            "type": "integer",
-            "description": "Number of items per page."
-          },
-          "totalCount": {
-            "type": "integer",
-            "description": "Total public samples matching the filter."
-          },
-          "totalPages": {
-            "type": "integer",
-            "description": "Total pages at this page size (0 when empty)."
+          "nextCursor": {
+            "type": "string",
+            "nullable": true,
+            "description": "Opaque cursor for the next item, or null when exhausted."
           }
         }
       },
       "PublicSampleDetail": {
         "type": "object",
-        "description": "A public sample's curated detail: display fields, geometry, and the live marker names, plus v1-relative links to the authed byte endpoints. Never exposes the owning org, internal sample id, or storage paths.",
+        "additionalProperties": false,
+        "description": "A public sample's curated detail. `id` is the public share UUID; the internal sample identity and job history are never exposed.",
         "required": [
-          "publicId",
+          "ownership",
+          "id",
           "title",
           "thumbnailUrl",
           "tags",
@@ -765,7 +813,13 @@
           "viewer"
         ],
         "properties": {
-          "publicId": {
+          "ownership": {
+            "type": "string",
+            "enum": [
+              "public"
+            ]
+          },
+          "id": {
             "type": "string",
             "format": "uuid"
           },
@@ -906,6 +960,7 @@
       },
       "post": {
         "summary": "Initiate a resumable upload",
+        "description": "Creates an organization-bound GCS resumable session. PUT the declared bytes to `uploadUrl`; when GCS finalizes the object, the platform automatically starts de-identification and preprocessing. There is no client finalize call. Poll `GET /uploads/{id}` until the sample leaves `uploading`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -945,6 +1000,7 @@
                       },
                       {
                         "type": "object",
+                        "additionalProperties": false,
                         "required": [
                           "x",
                           "y"
@@ -963,7 +1019,7 @@
                         }
                       }
                     ],
-                    "description": "Optional user-reported microns per pixel, for callers that already know their slide's scale. Slides are isotropic: pass a number, or an { x, y } object whose axes are equal (anisotropic input is rejected). Persisted on the sample at creation and takes precedence over the slide's own calibrated value, so `POST /predict` works as soon as preprocessing finishes — no follow-up `PATCH /samples/{id}/mpp` needed. Ignored when `contentSha256` deduplicates to an existing sample (that sample's scale stands)."
+                    "description": "Optional user-reported microns per pixel, for callers that already know their slide's scale. Slides are isotropic: pass a number, or an { x, y } object whose axes are equal (anisotropic input is rejected). Persisted on the sample at creation and takes precedence over the slide's own calibrated value, so `POST /predict` works as soon as preprocessing finishes — no follow-up `PATCH /samples/{id}` needed. Ignored when `contentSha256` deduplicates to an existing sample (that sample's scale stands)."
                   }
                 }
               }
@@ -1042,59 +1098,10 @@
         }
       }
     },
-    "/uploads/{id}/complete": {
-      "post": {
-        "summary": "Finalize a resumable upload",
-        "description": "Marks the upload `ready` and writes width/height into metadata (used by credit estimates).",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Upload finalized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UploadComplete"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Missing or invalid API key",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Upload not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/markers": {
       "get": {
         "summary": "List available markers",
-        "description": "The entitlement-scoped catalog of markers this account may request. Credit-free. The list equals exactly what predict/estimate will accept: a self-signup account sees the public panel; a full-panel account sees the whole vocab. Use it to discover valid marker names upfront instead of trial-and-error against a 400.",
+        "description": "The entitlement-scoped catalog of markers this account may request. Credit-free. The list equals exactly what predict will accept: a self-signup account sees the public panel; a full-panel account sees the whole vocab. Use it to discover valid marker names upfront instead of trial-and-error against a 400.",
         "responses": {
           "200": {
             "description": "The account's available markers",
@@ -1119,90 +1126,17 @@
         }
       }
     },
-    "/predict/estimate": {
-      "post": {
-        "summary": "Estimate credit cost for a prediction",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "uploadId",
-                  "markers"
-                ],
-                "properties": {
-                  "uploadId": {
-                    "type": "string",
-                    "format": "uuid"
-                  },
-                  "markers": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    },
-                    "minItems": 1
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Estimate",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Estimate"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Missing or invalid API key",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "One or more requested markers are outside this account's panel (`marker_not_available`).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Upload missing dimensions",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/predict": {
       "post": {
-        "summary": "Submit a prediction",
-        "description": "Reserves credits atomically and enqueues preprocessing. Returns 202 + `jobId`. On insufficient balance returns 402 with rollback.",
+        "summary": "Price or submit a prediction",
+        "description": "Set `dryRun: true` to validate and price the prediction without writes or credit reservation (200). Omit it or set it to false to reserve credits atomically and enqueue preprocessing (202).",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
+                "additionalProperties": false,
                 "required": [
                   "uploadId",
                   "markers"
@@ -1217,7 +1151,8 @@
                     "items": {
                       "type": "string"
                     },
-                    "minItems": 1
+                    "minItems": 1,
+                    "maxItems": 512
                   },
                   "model": {
                     "type": "string",
@@ -1227,6 +1162,11 @@
                       "v0.7"
                     ],
                     "description": "Optional explicit Lattice version. Only `v0.7` is dispatchable and is the current default; omit `model` to let the platform pick it. `v0.4`/`v0.5` are READ-ONLY as of 2026-06-23: they remain in this enum because they still appear on historical job records, but requesting one returns 400 `model_sunset` (with `currentDefault`). Legacy model strings return 400 `unknown_model`."
+                  },
+                  "dryRun": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When true, validates and returns the exact credit estimate without reserving credits, creating a job, or dispatching work."
                   }
                 }
               }
@@ -1234,6 +1174,16 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "Validated dry-run estimate with no side effects",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Estimate"
+                }
+              }
+            }
+          },
           "202": {
             "description": "Job accepted and credits reserved",
             "content": {
@@ -1307,7 +1257,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Job"
+                  "$ref": "#/components/schemas/SampleJob"
                 }
               }
             }
@@ -1829,8 +1779,8 @@
     },
     "/samples/{id}": {
       "get": {
-        "summary": "Get a sample",
-        "description": "Read a single sample's curated resource — identity, status, physical scale, tags, and its current expiration (including the read-only `expiresInDays` / `willExpire` projections). Any API key whose org owns the sample can read it.",
+        "summary": "Get an owned or public sample",
+        "description": "Resolve an org-owned sample id first, returning its curated detail and inference-job history. Otherwise resolve the same path value as a currently-public share UUID and return only public-safe detail.",
         "parameters": [
           {
             "name": "id",
@@ -1844,11 +1794,25 @@
         ],
         "responses": {
           "200": {
-            "description": "The sample resource",
+            "description": "Owned or public sample detail",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SampleResource"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/OwnedSampleDetail"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PublicSampleDetail"
+                    }
+                  ],
+                  "discriminator": {
+                    "propertyName": "ownership",
+                    "mapping": {
+                      "mine": "#/components/schemas/OwnedSampleDetail",
+                      "public": "#/components/schemas/PublicSampleDetail"
+                    }
+                  }
                 }
               }
             }
@@ -1865,6 +1829,114 @@
           },
           "404": {
             "description": "Sample not found in this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update a sample",
+        "description": "Atomically update any combination of an owned sample's display name, complete tag set, and isotropic microns-per-pixel value. Public share ids are not patchable. OAuth callers need both `samples:read` and `samples:write` because the response includes full owned detail and job history. When countable `mpp` is supplied, an idempotent recount is enqueued even if the stored value is unchanged; after an enqueue-failure 500, retry the identical patch to heal the recount.",
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "OAuth2": [
+              "samples:read",
+              "samples:write"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SamplePatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated owned sample detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnedSampleDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Body is not JSON, empty, or contains unknown fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "OAuth token lacks samples:read or samples:write, or the patch attempts to add/remove the reserved public tag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Owned sample not found in this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A provided field is invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The sample update committed but its MPP tissue recount could not be enqueued. Retry the identical patch to re-attempt the idempotent recount.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1944,254 +2016,6 @@
           },
           "422": {
             "description": "Invalid input",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/samples/{id}/tags": {
-      "get": {
-        "summary": "List sample tags",
-        "description": "Free-form, org-scoped labels on a sample (cohort / site / status). Returns tags sorted alphabetically.",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The sample's tags",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "tags": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/SampleTag"
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Missing or invalid API key",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Sample not found in this org",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "summary": "Add a sample tag",
-        "description": "Idempotent: re-adding an existing tag returns 200 with `created: false` rather than a conflict. Tags are normalized (trimmed + lowercased) before storage, so `HistoWiz` and `histowiz` are the same tag. Commas are rejected — the samples list uses them as a filter delimiter.",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "tag"
-                ],
-                "properties": {
-                  "tag": {
-                    "type": "string",
-                    "maxLength": 100,
-                    "description": "Tag to apply. Normalized to at most 50 characters after trimming and lowercasing."
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "The tag, whether newly created or already present",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "allOf": [
-                    {
-                      "$ref": "#/components/schemas/SampleTag"
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "created": {
-                          "type": "boolean",
-                          "description": "False when the tag was already on the sample."
-                        }
-                      }
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Body was not JSON",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Missing or invalid API key",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Tag is administered by Strand AI and cannot be set via the API",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Sample not found in this org",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Tag empty, too long, or contains a comma",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "summary": "Remove a sample tag",
-        "description": "Removing a tag that isn't present is not an error — the response reports `removed: false`.",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "tag",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Tag to remove. Normalized the same way as on write."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Whether a row was deleted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "removed": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Missing or invalid API key",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Tag is administered by Strand AI and cannot be set via the API",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Sample not found in this org",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Missing or invalid `tag` query parameter",
             "content": {
               "application/json": {
                 "schema": {
@@ -2284,85 +2108,6 @@
           },
           "422": {
             "description": "Invalid input",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/samples/{id}/mpp": {
-      "patch": {
-        "summary": "Set sample microns per pixel",
-        "description": "Set the user-reported physical pixel size for a sample. This value takes precedence over slide metadata and is used for pixel-scale normalization on subsequent inference jobs.",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MppUpdate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Updated microns per pixel",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MppUpdateResult"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Body is not valid JSON",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Missing or invalid API key",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Sample not found in this org",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "MPP is missing, out of range, or missing an axis",
             "content": {
               "application/json": {
                 "schema": {
@@ -2534,24 +2279,27 @@
         }
       }
     },
-    "/public/samples": {
+    "/samples": {
       "get": {
-        "summary": "List the public cohort",
-        "description": "List the curated public cohort (the TCGA release) newest-first. Available to any authenticated org for free — the cohort is org-independent, so a caller reads it regardless of their own org. Never reserves or spends credits.",
+        "summary": "List samples",
+        "description": "List the calling organization's samples, the public cohort, or both. Cursor-paginated newest-first; `all` always emits mine first and de-duplicates owned public samples in favor of the mine representation. Credit-free.",
         "parameters": [
           {
-            "name": "page",
+            "name": "scope",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "default": 1
-            },
-            "description": "1-based page number. Out-of-range or malformed values read page 1."
+              "type": "string",
+              "enum": [
+                "mine",
+                "public",
+                "all"
+              ],
+              "default": "mine"
+            }
           },
           {
-            "name": "pageSize",
+            "name": "limit",
             "in": "query",
             "required": false,
             "schema": {
@@ -2559,71 +2307,43 @@
               "minimum": 1,
               "maximum": 100,
               "default": 48
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
             },
-            "description": "Items per page (clamped to 100)."
+            "description": "Opaque cursor returned as `nextCursor`; not bound to page size."
           },
           {
             "name": "tag",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
-            },
-            "description": "Optional public display-tag filter. An unknown or malformed tag returns an empty page (it is never an enumeration oracle for private tags)."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "A page of the public cohort",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PublicSampleList"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Missing or invalid credential",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/public/samples/{publicId}": {
-      "get": {
-        "summary": "Get a public sample",
-        "description": "Read one public sample's curated detail: title, tags, public metadata, geometry, live marker names, and v1-relative links to its byte endpoints. Available to any authenticated org for free. A `publicId` that is not a currently-public sample returns 404 — there is no path to a non-public or org-scoped sample.",
-        "parameters": [
-          {
-            "name": "publicId",
-            "in": "path",
-            "required": true,
-            "schema": {
               "type": "string",
-              "format": "uuid"
-            }
+              "minLength": 1,
+              "pattern": "^[^,]+$"
+            },
+            "description": "Exact tag filter, normalized by trimming and lowercasing."
           }
         ],
         "responses": {
           "200": {
-            "description": "The public sample detail",
+            "description": "A scoped sample page",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PublicSampleDetail"
+                  "$ref": "#/components/schemas/SampleList"
                 }
               }
             }
           },
-          "401": {
-            "description": "Missing or invalid credential",
+          "400": {
+            "description": "Invalid query or cursor",
             "content": {
               "application/json": {
                 "schema": {
@@ -2632,8 +2352,8 @@
               }
             }
           },
-          "404": {
-            "description": "No currently-public sample matches the given publicId",
+          "401": {
+            "description": "Missing or invalid credential",
             "content": {
               "application/json": {
                 "schema": {

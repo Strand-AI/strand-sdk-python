@@ -24,6 +24,24 @@ GCS_URL = "https://storage.googleapis.com/test/resumable?upload_id=abc"
 RESULT_BASE = "predictions/org/33333333"
 
 
+def _mock_ingest_started(upload_id: str = UPLOAD_ID, status: str = "ready") -> None:
+    respx.get(f"{API_ROOT}/uploads/{upload_id}").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": upload_id,
+                "filename": "slide.svs",
+                "fileSize": "1048576",
+                "status": status,
+                "gcsPath": f"uploads/org/{upload_id}/slide.svs",
+                "createdAt": "2026-08-19T18:00:00Z",
+                "widthPx": 1024,
+                "heightPx": 1024,
+            },
+        )
+    )
+
+
 def _array_meta(shape: list[int], chunk: list[int], dtype: str = "float32") -> dict:
     return {
         "zarr_format": 3,
@@ -40,9 +58,7 @@ def _array_meta(shape: list[int], chunk: list[int], dtype: str = "float32") -> d
 def _root_meta(markers: list[str]) -> dict:
     multiscales = [{"version": "0.5", "name": "H&E", "datasets": [{"path": "he/0"}]}]
     for m in markers:
-        multiscales.append(
-            {"version": "0.5", "name": m, "datasets": [{"path": f"markers/{m}/0"}]}
-        )
+        multiscales.append({"version": "0.5", "name": m, "datasets": [{"path": f"markers/{m}/0"}]})
     return {
         "zarr_format": 3,
         "node_type": "group",
@@ -72,18 +88,7 @@ def _mock_full_pipeline(markers: list[str]) -> None:
 
     respx.put(GCS_URL).mock(side_effect=_gcs_put)
 
-    respx.post(f"{API_ROOT}/uploads/{UPLOAD_ID}/complete").mock(
-        return_value=Response(
-            200,
-            json={
-                "uploadId": UPLOAD_ID,
-                "status": "ready",
-                "widthPx": 1024,
-                "heightPx": 1024,
-                "dimensionsSource": "sharp",
-            },
-        )
-    )
+    _mock_ingest_started()
 
     respx.post(f"{API_ROOT}/predict").mock(
         return_value=Response(
@@ -98,9 +103,7 @@ def _mock_full_pipeline(markers: list[str]) -> None:
         f'"resultGcsPath":"{RESULT_BASE}"}}\n\n'
     ).encode()
     respx.get(f"{API_ROOT}/jobs/{JOB_ID}/stream").mock(
-        return_value=Response(
-            200, content=sse_body, headers={"content-type": "text/event-stream"}
-        )
+        return_value=Response(200, content=sse_body, headers={"content-type": "text/event-stream"})
     )
 
     # Polling fallback (in case SSE drops mid-test). Echoes the canonical
@@ -144,15 +147,11 @@ def _mock_full_pipeline(markers: list[str]) -> None:
     he_chunk = struct.pack("<12B", *range(12))
     marker_chunk = struct.pack("<4f", 1.0, 2.0, 3.0, 4.0)
 
-    respx.get(f"{base}/files/zarr.json").mock(
-        return_value=Response(200, content=json.dumps(root))
-    )
+    respx.get(f"{base}/files/zarr.json").mock(return_value=Response(200, content=json.dumps(root)))
     respx.get(f"{base}/files/he/0/zarr.json").mock(
         return_value=Response(200, content=json.dumps(he_meta))
     )
-    respx.get(f"{base}/files/he/0/c/0/0/0").mock(
-        return_value=Response(200, content=he_chunk)
-    )
+    respx.get(f"{base}/files/he/0/c/0/0/0").mock(return_value=Response(200, content=he_chunk))
     for m in markers:
         respx.get(f"{base}/files/markers/{m}/0/zarr.json").mock(
             return_value=Response(200, content=json.dumps(marker_meta))
@@ -163,9 +162,7 @@ def _mock_full_pipeline(markers: list[str]) -> None:
 
 
 @respx.mock
-def test_predict_full_pipeline_writes_files(
-    client: strand.Client, tmp_path: Path
-) -> None:
+def test_predict_full_pipeline_writes_files(client: strand.Client, tmp_path: Path) -> None:
     blob = tmp_path / "slide.svs"
     blob.write_bytes(b"x" * (256 * 1024))  # one 256 KiB chunk → single final PUT
     out = tmp_path / "out"
@@ -195,18 +192,14 @@ def test_predict_full_pipeline_writes_files(
 
 
 @respx.mock
-def test_predict_without_output_dir_skips_download(
-    client: strand.Client, tmp_path: Path
-) -> None:
+def test_predict_without_output_dir_skips_download(client: strand.Client, tmp_path: Path) -> None:
     blob = tmp_path / "slide.svs"
     blob.write_bytes(b"x" * (256 * 1024))
 
     markers = ["CD3"]
     _mock_full_pipeline(markers)
 
-    result = client.predict(
-        blob, markers=markers, poll_interval_sec=0.05, timeout_sec=10
-    )
+    result = client.predict(blob, markers=markers, poll_interval_sec=0.05, timeout_sec=10)
 
     assert result.status == "completed"
     assert result.output_dir is None
@@ -217,9 +210,7 @@ def test_predict_without_output_dir_skips_download(
 
 
 @respx.mock
-def test_predict_reports_progress_stages(
-    client: strand.Client, tmp_path: Path
-) -> None:
+def test_predict_reports_progress_stages(client: strand.Client, tmp_path: Path) -> None:
     blob = tmp_path / "slide.svs"
     blob.write_bytes(b"x" * (256 * 1024))
     out = tmp_path / "out"
@@ -252,9 +243,7 @@ def test_predict_reports_progress_stages(
 
 
 @respx.mock
-def test_predict_propagates_job_failure(
-    client: strand.Client, tmp_path: Path
-) -> None:
+def test_predict_propagates_job_failure(client: strand.Client, tmp_path: Path) -> None:
     blob = tmp_path / "slide.svs"
     blob.write_bytes(b"x" * (256 * 1024))
 
@@ -269,18 +258,7 @@ def test_predict_propagates_job_failure(
         )
     )
     respx.put(GCS_URL).mock(return_value=Response(200))
-    respx.post(f"{API_ROOT}/uploads/{UPLOAD_ID}/complete").mock(
-        return_value=Response(
-            200,
-            json={
-                "uploadId": UPLOAD_ID,
-                "status": "ready",
-                "widthPx": 8,
-                "heightPx": 8,
-                "dimensionsSource": "sharp",
-            },
-        )
-    )
+    _mock_ingest_started()
     respx.post(f"{API_ROOT}/predict").mock(
         return_value=Response(
             202,
@@ -288,8 +266,7 @@ def test_predict_propagates_job_failure(
         )
     )
     sse = (
-        f'data: {{"id":"{JOB_ID}","status":"failed","progress":null,'
-        f'"resultGcsPath":null}}\n\n'
+        f'data: {{"id":"{JOB_ID}","status":"failed","progress":null,"resultGcsPath":null}}\n\n'
     ).encode()
     respx.get(f"{API_ROOT}/jobs/{JOB_ID}/stream").mock(
         return_value=Response(200, content=sse, headers={"content-type": "text/event-stream"})
@@ -339,18 +316,7 @@ def test_predict_attaches_upload_id_on_submit_failure(
         )
     )
     respx.put(GCS_URL).mock(return_value=Response(200))
-    respx.post(f"{API_ROOT}/uploads/{UPLOAD_ID}/complete").mock(
-        return_value=Response(
-            200,
-            json={
-                "uploadId": UPLOAD_ID,
-                "status": "ready",
-                "widthPx": 8,
-                "heightPx": 8,
-                "dimensionsSource": "sharp",
-            },
-        )
-    )
+    _mock_ingest_started()
     # Submit fails with 402 — insufficient credits.
     respx.post(f"{API_ROOT}/predict").mock(
         return_value=Response(
@@ -392,8 +358,8 @@ def test_predict_submit_maps_unknown_markers(client: strand.Client) -> None:
 
 
 @respx.mock
-def test_predict_estimate_maps_unknown_markers(client: strand.Client) -> None:
-    respx.post(f"{API_ROOT}/predict/estimate").mock(
+def test_predict_dry_run_maps_unknown_markers(client: strand.Client) -> None:
+    respx.post(f"{API_ROOT}/predict").mock(
         return_value=Response(
             400,
             json={
@@ -405,7 +371,7 @@ def test_predict_estimate_maps_unknown_markers(client: strand.Client) -> None:
     )
 
     with pytest.raises(strand.UnknownMarkerError) as exc_info:
-        client.predict.estimate("upload-id", markers=["Bogus"])
+        client.predict.submit("upload-id", markers=["Bogus"], dry_run=True)
     assert exc_info.value.unknown == ["Bogus"]
     assert exc_info.value.known_subset is None
 
@@ -424,6 +390,39 @@ def test_predict_missing_file_raises(client: strand.Client, tmp_path: Path) -> N
 
 def test_model_id_includes_current_version_but_not_output_only_v0p6() -> None:
     assert get_args(strand.ModelId) == ("v0.4", "v0.5", "v0.7")
+
+
+@respx.mock
+def test_predict_submit_dry_run_returns_estimate_and_sends_discriminator(
+    client: strand.Client,
+) -> None:
+    route = respx.post(f"{API_ROOT}/predict").mock(
+        return_value=Response(
+            200,
+            json={
+                "dryRun": True,
+                "patchCount": 100,
+                "markerCount": 2,
+                "estimatedCredits": 200,
+                "orgBalance": 1000,
+                "orgPending": 50,
+            },
+        )
+    )
+
+    estimate = client.predict.submit(
+        UPLOAD_ID, markers=["CD3", "CD8"], model="v0.7", dry_run=True
+    )
+
+    assert isinstance(estimate, strand.Estimate)
+    assert estimate.estimated_credits == 200
+    assert route.calls.last.response.status_code == 200
+    assert json.loads(route.calls.last.request.content) == {
+        "uploadId": UPLOAD_ID,
+        "markers": ["CD3", "CD8"],
+        "model": "v0.7",
+        "dryRun": True,
+    }
 
 
 @respx.mock
@@ -535,15 +534,35 @@ def test_predict_submit_omits_model_field_when_unspecified(client: strand.Client
         )
     )
 
-    client.predict.submit(UPLOAD_ID, markers=["CD3"])
+    job = client.predict.submit(UPLOAD_ID, markers=["CD3"])
     sent = json.loads(route.calls[0].request.content)
+    assert isinstance(job, strand.Job)
+    assert sent == {"uploadId": UPLOAD_ID, "markers": ["CD3"]}
     assert "model" not in sent
+    assert "dryRun" not in sent
 
 
 @respx.mock
-def test_predict_wait_false_returns_job_after_submit(
-    client: strand.Client, tmp_path: Path
-) -> None:
+def test_predict_submit_explicit_false_is_the_same_job_request(client: strand.Client) -> None:
+    route = respx.post(f"{API_ROOT}/predict").mock(
+        return_value=Response(
+            202,
+            json={"jobId": JOB_ID, "reservedCredits": 7, "status": "queued"},
+        )
+    )
+
+    default_job = client.predict.submit(UPLOAD_ID, markers=["CD3"])
+    default_body = route.calls.last.request.content
+    explicit_false_job = client.predict.submit(UPLOAD_ID, markers=["CD3"], dry_run=False)
+
+    assert isinstance(default_job, strand.Job)
+    assert isinstance(explicit_false_job, strand.Job)
+    assert route.calls.last.request.content == default_body
+    assert json.loads(default_body) == {"uploadId": UPLOAD_ID, "markers": ["CD3"]}
+
+
+@respx.mock
+def test_predict_wait_false_returns_job_after_submit(client: strand.Client, tmp_path: Path) -> None:
     """`wait=False` returns a Job once upload + submit complete, skipping wait/download."""
     blob = tmp_path / "slide.svs"
     blob.write_bytes(b"x" * (256 * 1024))
@@ -559,18 +578,7 @@ def test_predict_wait_false_returns_job_after_submit(
         )
     )
     respx.put(GCS_URL).mock(return_value=Response(200))
-    respx.post(f"{API_ROOT}/uploads/{UPLOAD_ID}/complete").mock(
-        return_value=Response(
-            200,
-            json={
-                "uploadId": UPLOAD_ID,
-                "status": "ready",
-                "widthPx": 8,
-                "heightPx": 8,
-                "dimensionsSource": "sharp",
-            },
-        )
-    )
+    _mock_ingest_started()
     submit_route = respx.post(f"{API_ROOT}/predict").mock(
         return_value=Response(
             202,
@@ -606,9 +614,7 @@ def test_predict_wait_false_returns_job_after_submit(
 
 
 @respx.mock
-def test_predict_wait_false_forwards_model(
-    client: strand.Client, tmp_path: Path
-) -> None:
+def test_predict_wait_false_forwards_model(client: strand.Client, tmp_path: Path) -> None:
     """`model=` is plumbed through the wait=False path too."""
     blob = tmp_path / "slide.svs"
     blob.write_bytes(b"x" * (256 * 1024))
@@ -624,18 +630,7 @@ def test_predict_wait_false_forwards_model(
         )
     )
     respx.put(GCS_URL).mock(return_value=Response(200))
-    respx.post(f"{API_ROOT}/uploads/{UPLOAD_ID}/complete").mock(
-        return_value=Response(
-            200,
-            json={
-                "uploadId": UPLOAD_ID,
-                "status": "ready",
-                "widthPx": 8,
-                "heightPx": 8,
-                "dimensionsSource": "sharp",
-            },
-        )
-    )
+    _mock_ingest_started()
     submit_route = respx.post(f"{API_ROOT}/predict").mock(
         return_value=Response(
             202,
@@ -649,9 +644,7 @@ def test_predict_wait_false_forwards_model(
 
 
 @respx.mock
-def test_predict_sends_content_sha256_for_dedup(
-    client: strand.Client, tmp_path: Path
-) -> None:
+def test_predict_sends_content_sha256_for_dedup(client: strand.Client, tmp_path: Path) -> None:
     """`predict()` must call uploads with `if_not_exists=True` so the platform
     can dedup repeat calls on the same WSI instead of re-uploading + racing
     the still-preprocessing prior upload on submit(). Regression for #95."""
@@ -689,9 +682,7 @@ def test_predict_sends_content_sha256_for_dedup(
 
 
 @respx.mock
-def test_predict_threads_mpp_to_upload_init(
-    client: strand.Client, tmp_path: Path
-) -> None:
+def test_predict_threads_mpp_to_upload_init(client: strand.Client, tmp_path: Path) -> None:
     """`predict(..., mpp=...)` posts the scale on the upload-init body, so the
     one-shot pipeline needs no wait-for-ready → set_mpp step."""
     blob = tmp_path / "slide.svs"
@@ -716,20 +707,15 @@ def test_predict_threads_mpp_to_upload_init(
     # version that doesn't capture bodies.
     respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
 
-    client.predict(
-        blob, markers=["CD3"], mpp=0.2634, poll_interval_sec=0.05, timeout_sec=10
-    )
+    client.predict(blob, markers=["CD3"], mpp=0.2634, poll_interval_sec=0.05, timeout_sec=10)
 
     body = json.loads(init_bodies[0])
     assert body["mpp"] == 0.2634
 
 
 @respx.mock
-def test_predict_skips_reupload_on_dedup_hit(
-    client: strand.Client, tmp_path: Path
-) -> None:
-    """End-to-end: server reports `existing: true` → predict() proceeds straight
-    to submit/wait/download without touching GCS or /uploads/{id}/complete."""
+def test_predict_skips_reupload_on_dedup_hit(client: strand.Client, tmp_path: Path) -> None:
+    """End-to-end: a dedup hit proceeds to submit/wait/download without GCS PUT."""
     blob = tmp_path / "slide.svs"
     blob.write_bytes(b"x" * (256 * 1024))
 
@@ -751,13 +737,8 @@ def test_predict_skips_reupload_on_dedup_hit(
             },
         )
     )
-    # GCS PUT and /complete must NOT fire — wire routes that fail if hit.
-    gcs_route = respx.put(GCS_URL).mock(
-        return_value=Response(500, text="should not be called")
-    )
-    complete_route = respx.post(f"{API_ROOT}/uploads/{UPLOAD_ID}/complete").mock(
-        return_value=Response(500, text="should not be called")
-    )
+    # GCS PUT must NOT fire on a dedup hit.
+    gcs_route = respx.put(GCS_URL).mock(return_value=Response(500, text="should not be called"))
     # Submit/wait/download still run as normal.
     respx.post(f"{API_ROOT}/predict").mock(
         return_value=Response(
@@ -770,9 +751,7 @@ def test_predict_skips_reupload_on_dedup_hit(
         f'"resultGcsPath":"{RESULT_BASE}"}}\n\n'
     ).encode()
     respx.get(f"{API_ROOT}/jobs/{JOB_ID}/stream").mock(
-        return_value=Response(
-            200, content=sse_body, headers={"content-type": "text/event-stream"}
-        )
+        return_value=Response(200, content=sse_body, headers={"content-type": "text/event-stream"})
     )
     respx.get(f"{API_ROOT}/jobs/{JOB_ID}").mock(
         return_value=Response(
@@ -802,11 +781,8 @@ def test_predict_skips_reupload_on_dedup_hit(
         )
     )
 
-    result = client.predict(
-        blob, markers=["CD3"], poll_interval_sec=0.05, timeout_sec=10
-    )
+    result = client.predict(blob, markers=["CD3"], poll_interval_sec=0.05, timeout_sec=10)
 
     assert result.job_id == JOB_ID
     assert result.status == "completed"
     assert gcs_route.call_count == 0
-    assert complete_route.call_count == 0

@@ -30,7 +30,7 @@ from strand._client import _JobsNamespace
 from strand._jobs import Job
 from strand._markers import Markers
 from strand._predict import Predict
-from strand._public import PublicSample, PublicSamples
+from strand._public import PublicSample
 from strand._results import JobResults
 from strand._samples import Samples
 from strand._uploads import Uploads
@@ -64,12 +64,15 @@ SPEC_COVERAGE: dict[str, tuple[Any, dict[str, str]]] = {
         },
     ),
     "GET /uploads/{id}": (Uploads.get, {"id": "upload_id"}),
-    "POST /uploads/{id}/complete": (Uploads.upload_file, {"id": DERIVED}),
     "GET /markers": (Markers.list, {}),
-    "POST /predict/estimate": (Predict.estimate, {"uploadId": "upload_id", "markers": "markers"}),
     "POST /predict": (
         Predict.submit,
-        {"uploadId": "upload_id", "markers": "markers", "model": "model"},
+        {
+            "uploadId": "upload_id",
+            "markers": "markers",
+            "model": "model",
+            "dryRun": "dry_run",
+        },
     ),
     "GET /jobs/{id}": (_JobsNamespace.get, {"id": "job_id"}),
     "POST /jobs/{id}/cancel": (_JobsNamespace.cancel, {"id": "job_id"}),
@@ -83,8 +86,15 @@ SPEC_COVERAGE: dict[str, tuple[Any, dict[str, str]]] = {
     "GET /jobs/{id}/exports/ome-tiff": (Job.get_ome_tiff_export, {"id": BOUND}),
     "POST /jobs/{id}/exports/ome-zarr-zip": (Job.request_results_archive, {"id": BOUND}),
     "GET /jobs/{id}/exports/ome-zarr-zip": (Job.get_results_archive, {"id": BOUND}),
+    "GET /samples": (
+        Samples.list,
+        {"scope": "scope", "limit": "limit", "cursor": "cursor", "tag": "tag"},
+    ),
     "GET /samples/{id}": (Samples.get, {"id": "sample_id"}),
-    "PATCH /samples/{id}/mpp": (Samples.set_mpp, {"id": "sample_id", "mpp": "mpp"}),
+    "PATCH /samples/{id}": (
+        Samples.patch,
+        {"id": "sample_id", "name": "name", "tags": "tags", "mpp": "mpp"},
+    ),
     "PATCH /samples/{id}/expiration": (
         Samples.set_expiration,
         {
@@ -105,19 +115,11 @@ SPEC_COVERAGE: dict[str, tuple[Any, dict[str, str]]] = {
             "reason": "reason",
         },
     ),
-    "GET /public/samples": (
-        PublicSamples.list,
-        {"page": "page", "pageSize": "page_size", "tag": "tag"},
-    ),
-    "GET /public/samples/{publicId}": (PublicSamples.get, {"publicId": "public_id"}),
     "GET /public/samples/{publicId}/zarr/{path}": (
         PublicSample.download_to,
         {"publicId": BOUND, "path": DERIVED},  # id from the handle; paths from the zarr listing
     ),
     "POST /samples/{id}/restore": (Samples.restore, {"id": "sample_id"}),
-    "GET /samples/{id}/tags": (Samples.list_tags, {"id": "sample_id"}),
-    "POST /samples/{id}/tags": (Samples.add_tag, {"id": "sample_id", "tag": "tag"}),
-    "DELETE /samples/{id}/tags": (Samples.remove_tag, {"id": "sample_id", "tag": "tag"}),
 }
 
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}

@@ -1,4 +1,4 @@
-"""Upload tests: resumable chunking, finalization, error paths."""
+"""Upload tests: resumable chunking, event-driven ingest, error paths."""
 
 from __future__ import annotations
 
@@ -12,6 +12,31 @@ from httpx import Response
 
 import strand
 from tests.conftest import API_ROOT
+
+
+def _mock_ingest_started(
+    upload_id: str,
+    *,
+    status: str = "preprocessing",
+    gcs_path: str | None = None,
+    width_px: int | None = None,
+    height_px: int | None = None,
+) -> None:
+    respx.get(f"{API_ROOT}/uploads/{upload_id}").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": upload_id,
+                "filename": "slide.svs",
+                "fileSize": "1",
+                "status": status,
+                "gcsPath": gcs_path or f"uploads/org/{upload_id}/slide.svs",
+                "createdAt": "2026-08-19T18:00:00Z",
+                "widthPx": width_px,
+                "heightPx": height_px,
+            },
+        )
+    )
 
 
 @respx.mock
@@ -74,64 +99,7 @@ def test_create_session_rejects_non_positive_size(client: strand.Client) -> None
 
 
 @respx.mock
-def test_complete_finalizes_and_returns_completion(client: strand.Client) -> None:
-    """complete() is the finalize step an agent calls after PUTting bytes; it
-    hands the sample to de-identification + preprocessing."""
-    upload_id = "33333333-3333-4333-8333-333333333333"
-    route = respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
-        return_value=Response(200, json={"uploadId": upload_id, "status": "preprocessing"})
-    )
-
-    completion = client.uploads.complete(upload_id)
-
-    assert route.called
-    # No mpp → empty body.
-    assert route.calls[0].request.content in (b"", b"{}")
-    assert isinstance(completion, strand.UploadCompletion)
-    assert completion.upload_id == upload_id
-    assert completion.status == "preprocessing"
-    assert completion.skipped is False
-    assert completion.warning is None
-
-
-@respx.mock
-def test_complete_is_idempotent_and_surfaces_warning(client: strand.Client) -> None:
-    """A repeated finalize returns skipped=True; a scheduling failure surfaces a
-    warning rather than raising."""
-    upload_id = "44444444-4444-4444-8444-444444444444"
-    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
-        return_value=Response(
-            200,
-            json={
-                "uploadId": upload_id,
-                "status": "preprocessing",
-                "skipped": True,
-                "warning": "already finalized",
-            },
-        )
-    )
-
-    completion = client.uploads.complete(upload_id)
-
-    assert completion.skipped is True
-    assert completion.warning == "already finalized"
-
-
-@respx.mock
-def test_complete_forwards_mpp(client: strand.Client) -> None:
-    upload_id = "55555555-5555-4555-8555-555555555555"
-    route = respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
-        return_value=Response(200, json={"uploadId": upload_id, "status": "preprocessing"})
-    )
-
-    client.uploads.complete(upload_id, mpp=0.2634)
-
-    body = json.loads(route.calls[0].request.content)
-    assert body == {"mpp": 0.2634}
-
-
-@respx.mock
-def test_upload_file_chunks_and_finalizes(
+def test_upload_file_chunks_and_waits_for_automatic_ingest(
     client: strand.Client, tmp_path: Path
 ) -> None:
     gcs_upload_url = "https://storage.googleapis.com/test/resumable?upload_id=abc"
@@ -156,9 +124,7 @@ def test_upload_file_chunks_and_finalizes(
     chunk_calls: list[tuple[str, int]] = []
 
     def _record(request):
-        chunk_calls.append(
-            (request.headers.get("content-range", ""), len(request.content))
-        )
+        chunk_calls.append((request.headers.get("content-range", ""), len(request.content)))
         # First chunk → 308; final → 200.
         rng = request.headers["content-range"]
         # parse "bytes A-B/C"
@@ -169,18 +135,7 @@ def test_upload_file_chunks_and_finalizes(
 
     respx.put(gcs_upload_url).mock(side_effect=_record)
 
-    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
-        return_value=Response(
-            200,
-            json={
-                "uploadId": upload_id,
-                "status": "ready",
-                "widthPx": 4096,
-                "heightPx": 2048,
-                "dimensionsSource": "sharp",
-            },
-        )
-    )
+    _mock_ingest_started(upload_id, status="ready", width_px=4096, height_px=2048)
 
     progress_events: list[tuple[int, int]] = []
     upload = client.uploads.upload_file(
@@ -197,9 +152,7 @@ def test_upload_file_chunks_and_finalizes(
 
 
 @respx.mock
-def test_upload_rejects_invalid_chunk_size(
-    client: strand.Client, tmp_path: Path
-) -> None:
+def test_upload_rejects_invalid_chunk_size(client: strand.Client, tmp_path: Path) -> None:
     blob = tmp_path / "slide.svs"
     blob.write_bytes(b"x")
     with pytest.raises(ValueError, match="256 KiB"):
@@ -207,9 +160,7 @@ def test_upload_rejects_invalid_chunk_size(
 
 
 @respx.mock
-def test_upload_gcs_failure_raises_upload_error(
-    client: strand.Client, tmp_path: Path
-) -> None:
+def test_upload_gcs_failure_raises_upload_error(client: strand.Client, tmp_path: Path) -> None:
     upload_id = "11111111-1111-1111-1111-111111111111"
     gcs_upload_url = "https://storage.googleapis.com/test/resumable?upload_id=abc"
     blob = tmp_path / "slide.svs"
@@ -350,9 +301,9 @@ def test_upload_if_not_exists_skips_upload_on_dedup_hit(
 
     respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
     # GCS PUT must NOT fire — wire a route that explodes if hit.
-    gcs_route = respx.put(
-        "https://storage.googleapis.com/test/resumable"
-    ).mock(return_value=Response(500, text="should not be called"))
+    gcs_route = respx.put("https://storage.googleapis.com/test/resumable").mock(
+        return_value=Response(500, text="should not be called")
+    )
 
     upload = client.uploads.upload_file(blob, if_not_exists=True)
 
@@ -373,11 +324,8 @@ def test_upload_if_not_exists_skips_upload_on_dedup_hit(
 
 
 @respx.mock
-def test_upload_if_not_exists_uploads_on_miss(
-    client: strand.Client, tmp_path: Path
-) -> None:
-    """When the server says `existing: false`, the normal byte upload + complete
-    path runs."""
+def test_upload_if_not_exists_uploads_on_miss(client: strand.Client, tmp_path: Path) -> None:
+    """When the server says `existing: false`, bytes upload and automatic ingest starts."""
     blob = tmp_path / "slide.svs"
     payload = b"y" * (256 * 1024)  # exactly one chunk
     blob.write_bytes(payload)
@@ -401,18 +349,7 @@ def test_upload_if_not_exists_uploads_on_miss(
 
     respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
     respx.put(gcs_upload_url).mock(return_value=Response(200))
-    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
-        return_value=Response(
-            200,
-            json={
-                "uploadId": upload_id,
-                "status": "preprocessing",
-                "widthPx": 1024,
-                "heightPx": 512,
-                "dimensionsSource": "sharp",
-            },
-        )
-    )
+    _mock_ingest_started(upload_id, width_px=1024, height_px=512)
 
     upload = client.uploads.upload_file(blob, if_not_exists=True)
 
@@ -426,9 +363,7 @@ def test_upload_if_not_exists_uploads_on_miss(
 
 
 @respx.mock
-def test_upload_without_if_not_exists_omits_hash(
-    client: strand.Client, tmp_path: Path
-) -> None:
+def test_upload_without_if_not_exists_omits_hash(client: strand.Client, tmp_path: Path) -> None:
     """Default behavior: no sha256 computed, no `contentSha256` sent."""
     blob = tmp_path / "slide.svs"
     blob.write_bytes(b"z" * (256 * 1024))
@@ -450,18 +385,7 @@ def test_upload_without_if_not_exists_omits_hash(
 
     respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
     respx.put(gcs_upload_url).mock(return_value=Response(200))
-    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
-        return_value=Response(
-            200,
-            json={
-                "uploadId": upload_id,
-                "status": "preprocessing",
-                "widthPx": 1,
-                "heightPx": 1,
-                "dimensionsSource": "stub",
-            },
-        )
-    )
+    _mock_ingest_started(upload_id, gcs_path="p", width_px=1, height_px=1)
 
     client.uploads.upload_file(blob)
 
@@ -472,9 +396,7 @@ def test_upload_without_if_not_exists_omits_hash(
 
 
 @respx.mock
-def test_upload_omits_auto_segment_when_not_set(
-    client: strand.Client, tmp_path: Path
-) -> None:
+def test_upload_omits_auto_segment_when_not_set(client: strand.Client, tmp_path: Path) -> None:
     """Default: no `autoSegment` key on the init body (org default applies)."""
     blob = tmp_path / "slide.svs"
     blob.write_bytes(b"z" * (256 * 1024))
@@ -492,9 +414,7 @@ def test_upload_omits_auto_segment_when_not_set(
 
     respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
     respx.put(gcs_upload_url).mock(return_value=Response(200))
-    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
-        return_value=Response(200, json={"uploadId": upload_id, "status": "preprocessing"})
-    )
+    _mock_ingest_started(upload_id, gcs_path="p")
 
     client.uploads.upload_file(blob)
 
@@ -506,9 +426,7 @@ def test_upload_omits_auto_segment_when_not_set(
 
 @respx.mock
 @pytest.mark.parametrize("value", [True, False])
-def test_upload_forwards_auto_segment(
-    client: strand.Client, tmp_path: Path, value: bool
-) -> None:
+def test_upload_forwards_auto_segment(client: strand.Client, tmp_path: Path, value: bool) -> None:
     """`auto_segment=True/False` is posted as `autoSegment` on the init body."""
     blob = tmp_path / "slide.svs"
     blob.write_bytes(b"z" * (256 * 1024))
@@ -526,9 +444,7 @@ def test_upload_forwards_auto_segment(
 
     respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
     respx.put(gcs_upload_url).mock(return_value=Response(200))
-    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
-        return_value=Response(200, json={"uploadId": upload_id, "status": "preprocessing"})
-    )
+    _mock_ingest_started(upload_id, gcs_path="p")
 
     client.uploads.upload_file(blob, auto_segment=value)
 
@@ -563,9 +479,7 @@ def test_upload_forwards_mpp_as_isotropic_scalar(
 
     respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
     respx.put(gcs_upload_url).mock(return_value=Response(200))
-    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
-        return_value=Response(200, json={"uploadId": upload_id, "status": "preprocessing"})
-    )
+    _mock_ingest_started(upload_id, gcs_path="p")
 
     client.uploads.upload_file(blob, mpp=value)
 
@@ -594,9 +508,7 @@ def test_upload_omits_mpp_when_not_set(client: strand.Client, tmp_path: Path) ->
 
     respx.post(f"{API_ROOT}/uploads").mock(side_effect=_init)
     respx.put(gcs_upload_url).mock(return_value=Response(200))
-    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
-        return_value=Response(200, json={"uploadId": upload_id, "status": "preprocessing"})
-    )
+    _mock_ingest_started(upload_id, gcs_path="p")
 
     client.uploads.upload_file(blob)
 
@@ -649,24 +561,16 @@ def test_get_upload_surfaces_auto_segment(client: strand.Client) -> None:
 def test_get_upload_unknown_raises_not_found(client: strand.Client) -> None:
     upload_id = "33333333-3333-4333-8333-333333333333"
     respx.get(f"{API_ROOT}/uploads/{upload_id}").mock(
-        return_value=Response(
-            404, json={"error": "not_found", "message": "Upload not found"}
-        )
+        return_value=Response(404, json={"error": "not_found", "message": "Upload not found"})
     )
     with pytest.raises(strand.NotFoundError):
         client.uploads.get(upload_id)
 
 
-# --- completion response shapes actually served in production -----------------
-#
-# Completion hands the sample to de-identification and returns no slide
-# dimensions; they are read later off the de-identified copy. The tests above
-# all mock a `widthPx`-bearing body, which is why `int(raw["widthPx"])` in
-# `_with_completion` went unnoticed until a real upload raised KeyError.
+# --- event-driven ingest wait --------------------------------------------------
 
 
-def _mock_upload_flow(upload_id: str, gcs_upload_url: str, complete_body: dict) -> None:
-    """Wire the three calls upload_file makes, with a caller-supplied completion."""
+def _mock_upload_transport(upload_id: str, gcs_upload_url: str) -> None:
     respx.post(f"{API_ROOT}/uploads").mock(
         return_value=Response(
             200,
@@ -679,65 +583,59 @@ def _mock_upload_flow(upload_id: str, gcs_upload_url: str, complete_body: dict) 
         )
     )
     respx.put(gcs_upload_url).mock(return_value=Response(200))
-    respx.post(f"{API_ROOT}/uploads/{upload_id}/complete").mock(
-        return_value=Response(200, json=complete_body)
-    )
+
+
+def _row(upload_id: str, status: str) -> dict:
+    return {
+        "id": upload_id,
+        "filename": "slide.svs",
+        "fileSize": "512",
+        "status": status,
+        "gcsPath": f"uploads/org/{upload_id}/slide.svs",
+        "createdAt": "2026-08-19T18:00:00Z",
+        "widthPx": None,
+        "heightPx": None,
+    }
 
 
 @respx.mock
-def test_complete_without_dimensions(client, tmp_path) -> None:
+def test_upload_waits_until_object_finalize_starts_ingest(client, tmp_path, monkeypatch) -> None:
     upload_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
     url = "https://storage.googleapis.com/upload/deid-1"
     blob = tmp_path / "slide.svs"
     blob.write_bytes(b"x" * 512)
-
-    _mock_upload_flow(upload_id, url, {"uploadId": upload_id, "status": "deid_running"})
+    _mock_upload_transport(upload_id, url)
+    monkeypatch.setattr("strand._uploads.time.sleep", lambda _seconds: None)
+    route = respx.get(f"{API_ROOT}/uploads/{upload_id}").mock(
+        side_effect=[
+            Response(200, json=_row(upload_id, "uploading")),
+            Response(200, json=_row(upload_id, "deid_running")),
+        ]
+    )
 
     upload = client.uploads.upload_file(blob)
 
+    assert route.call_count == 2
     assert upload.id == upload_id
     assert upload.status == "deid_running"
-    # Not an error, and not zero — genuinely not known yet.
     assert upload.width_px is None
     assert upload.height_px is None
+    assert upload.upload_url == url
 
 
 @respx.mock
-def test_complete_is_idempotent_and_echoes_current_status(client, tmp_path) -> None:
-    # A duplicate completion returns `skipped: true` with whatever status the
-    # sample already had, and no dimensions.
+def test_upload_surfaces_terminal_object_size_failure(client, tmp_path) -> None:
     upload_id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
     url = "https://storage.googleapis.com/upload/deid-2"
     blob = tmp_path / "slide.svs"
     blob.write_bytes(b"x" * 512)
-
-    _mock_upload_flow(
-        upload_id, url, {"uploadId": upload_id, "status": "preprocessing", "skipped": True}
+    _mock_upload_transport(upload_id, url)
+    respx.get(f"{API_ROOT}/uploads/{upload_id}").mock(
+        return_value=Response(200, json=_row(upload_id, "upload_failed"))
     )
 
-    upload = client.uploads.upload_file(blob)
+    with pytest.raises(strand.UploadError, match="size did not match") as exc_info:
+        client.uploads.upload_file(blob)
 
-    assert upload.status == "preprocessing"
-    assert upload.width_px is None
-
-
-@respx.mock
-def test_complete_surfaces_deid_scheduling_failure(client, tmp_path) -> None:
-    upload_id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
-    url = "https://storage.googleapis.com/upload/deid-3"
-    blob = tmp_path / "slide.svs"
-    blob.write_bytes(b"x" * 512)
-
-    _mock_upload_flow(
-        upload_id,
-        url,
-        {
-            "uploadId": upload_id,
-            "status": "deid_failed",
-            "warning": "Upload succeeded but de-identification could not be scheduled.",
-        },
-    )
-
-    # The SDK does not raise here — the caller inspects status and decides.
-    upload = client.uploads.upload_file(blob)
-    assert upload.status == "deid_failed"
+    assert exc_info.value.error_code == "upload_failed"
+    assert exc_info.value.upload_id == upload_id

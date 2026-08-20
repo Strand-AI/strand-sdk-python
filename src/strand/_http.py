@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any, cast
 
 import httpx
@@ -29,7 +30,12 @@ from ._errors import (
 
 DEFAULT_BASE_URL = "https://app.strandai.com"
 DEFAULT_TIMEOUT = 60.0
-USER_AGENT = "strand-sdk-python/0.2.0"
+
+try:
+    _SDK_VERSION = version("strand-sdk")
+except PackageNotFoundError:
+    _SDK_VERSION = "unknown"
+USER_AGENT = f"strand-sdk-python/{_SDK_VERSION}"
 
 
 class HttpSession:
@@ -155,7 +161,14 @@ class HttpSession:
             timeout if timeout is not None else httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
         )
         req = self._client.build_request(method, path, params=params, timeout=ctx_timeout)
-        return self._client.send(req, stream=True)
+        response = self._client.send(req, stream=True)
+        if response.status_code >= 400:
+            response.read()
+            try:
+                self._raise_for_error(response)
+            finally:
+                response.close()
+        return response
 
     # ---------- error mapping ----------
 

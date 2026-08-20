@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import struct
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -152,6 +155,51 @@ def test_wait_via_sse_resolves_on_terminal_event(client: strand.Client) -> None:
     job = client.predict.submit("upload-id", markers=["CD3"])
     status = job.wait(timeout=10, poll_interval=0.1)
     assert status.status == "completed"
+
+
+@pytest.mark.parametrize("heartbeats", [False, True])
+def test_wait_timeout_bounds_silent_or_heartbeat_only_sse(heartbeats: bool) -> None:
+    class IdleSseHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+        send_heartbeats = heartbeats
+
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.end_headers()
+            self.wfile.flush()
+            if self.send_heartbeats:
+                for _ in range(50):
+                    try:
+                        self.wfile.write(b": keep-alive\n\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        break
+                    time.sleep(0.01)
+            else:
+                time.sleep(0.5)
+            self.close_connection = True
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), IdleSseHandler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    client = strand.Client(api_key="sk-strand-test", base_url=base_url, timeout=1.0)
+    job = strand.Job(id="silent-job", reserved_credits=None, client=client)
+    started = time.monotonic()
+    try:
+        with pytest.raises(strand.JobTimeoutError, match=r"within 0\.05s"):
+            job.wait(timeout=0.05, poll_interval=0.001)
+        assert time.monotonic() - started < 0.3
+    finally:
+        client.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
 
 
 @respx.mock
@@ -467,6 +515,51 @@ def test_export_ome_tiff_waits_and_downloads(
     assert download.called
     assert written == target
     assert target.read_bytes() == b"TIFF"
+
+
+@pytest.mark.parametrize("timeout", [None, 1.0])
+@respx.mock
+def test_export_ome_tiff_fails_immediately_with_server_error(
+    client: strand.Client,
+    tmp_path: Path,
+    timeout: float | None,
+) -> None:
+    job_id = "22222222-2222-2222-2222-222222222222"
+    endpoint = f"{API_ROOT}/jobs/{job_id}/exports/ome-tiff"
+    respx.post(endpoint).mock(
+        return_value=Response(
+            202,
+            json={
+                "status": "running",
+                "format": "ome-tiff",
+                "sizeBytes": None,
+                "updatedAt": None,
+            },
+        )
+    )
+    failed = respx.get(endpoint).mock(
+        return_value=Response(
+            200,
+            json={
+                "status": "failed",
+                "format": "ome-tiff",
+                "sizeBytes": None,
+                "error": "renderer crashed",
+                "updatedAt": "2026-07-30T10:05:00Z",
+            },
+        )
+    )
+
+    job = strand.Job(id=job_id, reserved_credits=None, client=client)
+    with pytest.raises(strand.StrandError, match="renderer crashed") as exc_info:
+        job.export_ome_tiff(
+            str(tmp_path / "result.ome.tiff"),
+            timeout=timeout,
+            poll_interval=0,
+        )
+
+    assert failed.call_count == 1
+    assert exc_info.value.error_code == "export_failed"
 
 
 @respx.mock

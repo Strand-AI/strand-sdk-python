@@ -1,4 +1,4 @@
-"""Predict namespace: estimate + submit, plus the one-shot pipeline."""
+"""Prediction submission, dry-run pricing, and the one-shot pipeline."""
 
 from __future__ import annotations
 
@@ -46,19 +46,43 @@ class Predict:
 
     The instance is **callable**: `client.predict(image_path, markers=[...])`
     runs the full pipeline (upload → submit → wait → download) and blocks
-    until completion. The lower-level primitives (`estimate`, `submit`) stay
-    available as namespace methods.
+    until completion. `submit(..., dry_run=True)` prices the same request
+    without reserving credits or creating a job.
     """
 
     def __init__(self, http: HttpSession, client: Client) -> None:
         self._http = http
         self._client = client
 
-    def estimate(self, upload_id: str, markers: Sequence[str]) -> Estimate:
-        """Compute credits required for `(upload_id, markers)`. No reservation."""
-        body = {"uploadId": upload_id, "markers": _coerce_markers(markers)}
-        raw = self._http.request_json("POST", "/predict/estimate", json=body)
-        return Estimate._from_dict(raw)
+    @overload
+    def submit(
+        self,
+        upload_id: str,
+        markers: Sequence[str],
+        *,
+        model: ModelId | str | None = ...,
+        dry_run: Literal[False] = ...,
+    ) -> Job: ...
+
+    @overload
+    def submit(
+        self,
+        upload_id: str,
+        markers: Sequence[str],
+        *,
+        model: ModelId | str | None = ...,
+        dry_run: Literal[True],
+    ) -> Estimate: ...
+
+    @overload
+    def submit(
+        self,
+        upload_id: str,
+        markers: Sequence[str],
+        *,
+        model: ModelId | str | None = ...,
+        dry_run: bool,
+    ) -> Job | Estimate: ...
 
     def submit(
         self,
@@ -66,7 +90,8 @@ class Predict:
         markers: Sequence[str],
         *,
         model: ModelId | str | None = None,
-    ) -> Job:
+        dry_run: bool = False,
+    ) -> Job | Estimate:
         """Submit a job. Atomically reserves credits. Returns a `Job` immediately.
 
         Args:
@@ -82,6 +107,8 @@ class Predict:
                 Legacy aliases (`"v10"`, `"v10-fullpanel"`, `"v10-fullpanel-v2"`)
                 were dropped on 2026-06-03 — the server now rejects them with
                 400 `unknown_model`. Pass the canonical v0.X id directly.
+            dry_run: When true, validate and price the request without reserving
+                credits or creating a job. Returns an `Estimate`.
 
         Raises:
             InsufficientCreditsError: 402 — not enough credits to reserve.
@@ -96,6 +123,10 @@ class Predict:
         }
         if model is not None:
             body["model"] = model
+        if dry_run:
+            body["dryRun"] = True
+            raw = self._http.request_json("POST", "/predict", json=body, expected=(200,))
+            return Estimate._from_dict(raw)
         raw = self._http.request_json("POST", "/predict", json=body, expected=(202,))
         return Job(
             id=str(raw["jobId"]),
@@ -168,8 +199,8 @@ class Predict:
                 an already-uploaded slide (the earlier decision stands).
             mpp: User-reported microns per pixel for the uploaded slide, when the
                 caller already knows its scale. Persisted at creation and wins
-                over the slide's own calibrated value — no separate
-                `samples.set_mpp(...)` call needed. Isotropic: a float, or an
+                over the slide's own calibrated value — no follow-up patch
+                needed. Isotropic: a float, or an
                 `(x, y)` tuple with equal axes; > 0 and <= 100. Ignored on a
                 dedup hit (the existing sample's scale stands).
             wait: When `True` (default), block through upload → submit → wait

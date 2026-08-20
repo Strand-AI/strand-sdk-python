@@ -9,7 +9,6 @@ import httpx
 from ._http import DEFAULT_TIMEOUT, HttpSession
 from ._markers import Markers
 from ._predict import Predict
-from ._public import PublicSamples
 from ._samples import Samples
 from ._uploads import Uploads
 
@@ -71,7 +70,7 @@ class Client:
     Lower-level primitives (`client.predict` is also a namespace):
 
         >>> upload = client.uploads.upload_file("slide.svs")
-        >>> estimate = client.predict.estimate(upload.id, markers=["CD3"])
+        >>> estimate = client.predict.submit(upload.id, markers=["CD3"], dry_run=True)
         >>> job = client.predict.submit(upload.id, markers=["CD3"])
         >>> job.wait()
         >>> adata = job.download_results()
@@ -97,7 +96,6 @@ class Client:
         self.predict = Predict(self._http, self)
         self.jobs = _JobsNamespace(self)
         self.samples = Samples(self._http)
-        self.public = PublicSamples(self._http)
         self.markers = Markers(self._http)
 
     @property

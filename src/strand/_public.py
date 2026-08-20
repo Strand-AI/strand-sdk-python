@@ -1,25 +1,13 @@
-"""Public-cohort reads — the free, credit-less `client.public` namespace.
-
-Any authenticated org can browse and read Strand's curated public cohort (the
-TCGA release) for free — it is org-independent, so you read it regardless of
-which org your credential belongs to, and no read reserves credits. Mirrors:
-
-    GET /api/v1/public/samples                       -> list(...)
-    GET /api/v1/public/samples/{publicId}            -> get(public_id)
-    GET /api/v1/public/samples/{publicId}/zarr/{...} -> PublicSample.download_to(...)
-
-Generation stays credit-gated and lives on `client.predict` / `client.uploads`;
-this namespace is read-only.
-"""
+"""Download-capable handle for a public sample resolved by `client.samples.get`."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ._errors import StrandError
-from ._models import PublicSampleGeometry, PublicSampleList
+from ._models import PublicSampleGeometry
 from ._results import mirror_zarr_store
 
 if TYPE_CHECKING:
@@ -27,19 +15,20 @@ if TYPE_CHECKING:
 
 
 class PublicSample:
-    """Handle for one public-cohort sample (`client.public.get(public_id)`).
+    """Public sample detail with authenticated OME-Zarr byte access.
 
-    Carries the curated detail — `title`, `tags`, `metadata`, `geometry`, and
-    the live `markers` — and reads the sample's OME-Zarr pyramid (H&E + every
-    marker channel) through the authenticated public byte proxy. Use
-    `download_to(dir)` to mirror the whole store locally.
+    Instances come from `client.samples.get(public_id)`. The public share id is
+    exposed as canonical `id`; `download_to(dir)` mirrors the complete H&E and
+    marker store through the retained v1 public byte routes.
     """
+
+    ownership: Literal["public"] = "public"
 
     def __init__(
         self,
         *,
         http: HttpSession,
-        public_id: str,
+        id: str,
         title: str,
         tags: list[str],
         metadata: dict[str, Any],
@@ -49,7 +38,7 @@ class PublicSample:
         pyramid_url: str,
     ) -> None:
         self._http = http
-        self.public_id = public_id
+        self.id = id
         self.title = title
         self.tags = tags
         self.metadata = metadata
@@ -63,27 +52,44 @@ class PublicSample:
     def _from_dict(cls, http: HttpSession, raw: dict[str, Any]) -> PublicSample:
         viewer = raw.get("viewer") or {}
         markers = [
-            str(m["name"])
-            for m in viewer.get("markers", [])
-            if isinstance(m, dict) and m.get("name")
+            str(marker["name"])
+            for marker in viewer.get("markers", [])
+            if isinstance(marker, dict) and marker.get("name")
         ]
         return cls(
             http=http,
-            public_id=str(raw["publicId"]),
-            title=str(raw.get("title", "")),
-            tags=[str(t) for t in raw.get("tags", [])],
+            id=str(raw["id"]),
+            title=str(raw["title"]),
+            tags=[str(tag) for tag in raw.get("tags", [])],
             metadata=dict(raw.get("metadata") or {}),
             geometry=PublicSampleGeometry._from_dict(raw.get("geometry") or {}),
             markers=markers,
-            thumbnail_url=str(raw.get("thumbnailUrl", "")),
-            pyramid_url=str(viewer.get("pyramidUrl", "")),
+            thumbnail_url=str(raw["thumbnailUrl"]),
+            pyramid_url=str(viewer["pyramidUrl"]),
         )
 
-    # ---------- zarr byte access via the public proxy ----------
+    def to_dict(self) -> dict[str, Any]:
+        """Return the serializable, public-only detail represented by this handle."""
+        return {
+            "ownership": self.ownership,
+            "id": self.id,
+            "title": self.title,
+            "tags": list(self.tags),
+            "metadata": dict(self.metadata),
+            "geometry": {
+                "width_px": self.geometry.width_px,
+                "height_px": self.geometry.height_px,
+                "mpp_x": self.geometry.mpp_x,
+                "mpp_y": self.geometry.mpp_y,
+            },
+            "markers": list(self.markers),
+            "thumbnail_url": self.thumbnail_url,
+            "pyramid_url": self.pyramid_url,
+        }
 
     def _zarr_path(self, path: str) -> str:
         rel = path.strip("/")
-        base = f"/public/samples/{self.public_id}/zarr"
+        base = f"/public/samples/{self.id}/zarr"
         return f"{base}/{rel}" if rel else f"{base}/"
 
     def get_bytes(self, path: str) -> bytes:
@@ -98,67 +104,11 @@ class PublicSample:
         return data
 
     def root_meta(self) -> dict[str, Any]:
-        """The root group's `zarr.json` (H&E + every marker multiscale), cached."""
+        """Return the cached root `zarr.json` group for H&E and marker multiscales."""
         if self._root_cache is None:
             self._root_cache = self.get_json("zarr.json")
         return self._root_cache
 
     def download_to(self, target: str | Path) -> Path:
-        """Mirror the sample's entire OME-Zarr store (H&E + markers) to `target/`.
-
-        This materializes the actual marker pixel data. The result is a valid
-        zarr v3 store readable by `zarr.open(target)`; missing chunks are left
-        absent (read as `fill_value`). Returns the `target` path.
-        """
+        """Mirror the sample's complete OME-Zarr store to `target`."""
         return mirror_zarr_store(self.root_meta(), self.get_json, self.get_bytes, target)
-
-
-class PublicSamples:
-    """`client.public` namespace — read the curated public cohort for free."""
-
-    def __init__(self, http: HttpSession) -> None:
-        self._http = http
-
-    def list(
-        self,
-        *,
-        page: int | None = None,
-        page_size: int | None = None,
-        tag: str | None = None,
-    ) -> PublicSampleList:
-        """List the public cohort (paginated, newest-first).
-
-        Args:
-            page: 1-based page number (defaults to 1).
-            page_size: Items per page (server default 48, max 100).
-            tag: Optional public display-tag filter. An unknown tag returns an
-                empty page.
-
-        Returns:
-            A `PublicSampleList` page of `PublicSampleSummary` cards.
-        """
-        params: dict[str, Any] = {}
-        if page is not None:
-            params["page"] = page
-        if page_size is not None:
-            params["pageSize"] = page_size
-        if tag is not None:
-            params["tag"] = tag
-        payload = self._http.request_json("GET", "/public/samples", params=params or None)
-        return PublicSampleList._from_dict(payload)
-
-    def get(self, public_id: str) -> PublicSample:
-        """Fetch one public sample's detail as a `PublicSample` handle.
-
-        Args:
-            public_id: The sample's public id (from `list(...)`).
-
-        Returns:
-            A `PublicSample` — read its `markers` / `geometry`, or call
-            `download_to(dir)` to materialize the marker data.
-
-        Raises:
-            NotFoundError: No currently-public sample matches `public_id`.
-        """
-        payload = self._http.request_json("GET", f"/public/samples/{public_id}")
-        return PublicSample._from_dict(self._http, payload)

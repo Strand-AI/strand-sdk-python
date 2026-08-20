@@ -4,8 +4,8 @@ Exposed as `client.markers`. Mirrors:
 
     GET /api/v1/markers  -> list()
 
-Credit-free. The returned list is exactly what `client.predict` /
-`client.predict.estimate` will accept for this account: a self-signup account
+Credit-free. The returned list is exactly what `client.predict` and
+`client.predict.submit` will accept for this account: a self-signup account
 sees the public panel; a full-panel account sees the whole vocab. Use it to
 discover valid marker names upfront instead of trial-and-error.
 """

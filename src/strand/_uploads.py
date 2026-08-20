@@ -1,9 +1,9 @@
 """Uploads namespace.
 
-Handles the three-step resumable flow:
-  1. POST /api/v1/uploads          → create session
-  2. PUT  <uploadUrl> w/ Content-Range  → stream chunks directly to GCS
-  3. POST /api/v1/uploads/{id}/complete → finalize, read slide dims
+Handles the event-driven resumable flow:
+  1. POST /api/v1/uploads             → create session
+  2. PUT  <uploadUrl> w/ Content-Range → stream chunks directly to GCS
+  3. Poll GET /api/v1/uploads/{id} until GCS OBJECT_FINALIZE starts ingest
 
 The chunked PUT bypasses the platform; we hit GCS directly using the
 resumable session URL it returns. Chunks must be a multiple of 256 KiB
@@ -14,15 +14,16 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from ._errors import UploadError
-from ._models import Upload, UploadCompletion
+from ._models import Upload
 from ._samples import _validate_mpp
 
 if TYPE_CHECKING:
@@ -35,6 +36,7 @@ class UploadList:
 
     uploads: list[Upload]
     next_cursor: str | None
+
 
 CHUNK_SIZE = 8 * 1024 * 1024  # 8 MiB — GCS resumable requires multiples of 256 KiB.
 DEFAULT_CONTENT_TYPE = "application/octet-stream"
@@ -57,6 +59,8 @@ ProgressCb = Callable[[int, int], None]
 # Read size for streaming sha256. Bigger than CHUNK_SIZE is fine — we're not
 # bound by GCS multiples here; 1 MiB is a good cache-friendly value.
 _HASH_READ_SIZE = 1024 * 1024
+_INGEST_POLL_INTERVAL_SECONDS = 0.5
+_INGEST_START_TIMEOUT_SECONDS = 120.0
 
 
 def _normalize_mpp(mpp: float | tuple[float, float] | None) -> float | None:
@@ -153,9 +157,10 @@ class Uploads:
         This is step 1 of the resumable flow WITHOUT the byte stream: it mints
         the session and returns an `Upload` whose `upload_url` is the resumable
         target the caller PUTs the slide bytes to directly, plus `id` (the
-        `upload_id`). After the bytes land, call `complete(upload_id)` to hand
-        the sample to de-identification + preprocessing. Contrast with
-        `upload_file`, which does all three steps for a local path in one call.
+        `upload_id`). After the bytes land, GCS automatically starts
+        de-identification + preprocessing. Poll `get(upload_id)` until the
+        status leaves `uploading`. Contrast with `upload_file`, which streams
+        a local path and performs that short ingest-start wait in one call.
 
         The session (and the object key it writes to) is bound to the calling
         org by the server; there is no way to redirect it to another org.
@@ -184,41 +189,8 @@ class Uploads:
         mpp_value = _normalize_mpp(mpp)
         # content_sha256 is None: the agent supplies the bytes, so we don't
         # dedup here (that path needs a client-computed hash of a local file).
-        session, _existing = self._initiate(
-            filename, file_size, ct, None, auto_segment, mpp_value
-        )
+        session, _existing = self._initiate(filename, file_size, ct, None, auto_segment, mpp_value)
         return session
-
-    def complete(
-        self,
-        upload_id: str,
-        *,
-        mpp: float | tuple[float, float] | None = None,
-    ) -> UploadCompletion:
-        """Finalize a session-based upload after the bytes have been PUT.
-
-        Advances the sample out of `uploading` and into de-identification +
-        preprocessing — the SAME post-upload pipeline `upload_file` triggers, so
-        de-id runs regardless of how the bytes arrived. Idempotent: a second
-        call (or a race) returns `skipped=True`. Scoped to the calling org; an
-        `upload_id` from another org is not found.
-
-        Args:
-            upload_id: The `id` returned by `create_session`.
-            mpp: Optional user-reported microns per pixel captured at upload
-                time (isotropic scalar or an equal-valued ``(x, y)`` tuple).
-        """
-        body: dict[str, Any] = {}
-        mpp_value = _normalize_mpp(mpp)
-        if mpp_value is not None:
-            body["mpp"] = mpp_value
-        if body:
-            raw = self._http.request_json(
-                "POST", f"/uploads/{upload_id}/complete", json=body
-            )
-        else:
-            raw = self._http.request_json("POST", f"/uploads/{upload_id}/complete")
-        return UploadCompletion._from_dict(raw)
 
     def upload_file(
         self,
@@ -234,9 +206,8 @@ class Uploads:
         """Upload a local WSI file end-to-end.
 
         Streams in 8 MiB chunks via the GCS resumable session URL returned by
-        `POST /api/v1/uploads`, then finalizes via `POST /uploads/{id}/complete`.
-        The returned `Upload` carries slide dimensions (`width_px`, `height_px`)
-        and `status="ready"`.
+        `POST /api/v1/uploads`. GCS OBJECT_FINALIZE starts ingest automatically;
+        this method polls the upload resource until that event is accepted.
 
         Args:
             path: Local file to upload.
@@ -256,16 +227,17 @@ class Uploads:
                 their slide's scale. Persisted on the sample at creation and takes
                 precedence over the slide's own calibrated value, so the sample is
                 predict-ready as soon as preprocessing finishes — no follow-up
-                `samples.set_mpp(...)` needed. Slides are isotropic: pass a float,
+                `samples.patch(..., mpp=...)` needed. Slides are isotropic: pass a float,
                 or an `(x, y)` tuple whose values are equal. Must be > 0 and
                 <= 100. Ignored on an `if_not_exists` dedup hit (the existing
                 sample's scale stands).
 
         Returns:
-            `Upload` with `width_px` / `height_px` / `status="ready"` populated.
+            `Upload` after the storage event has advanced it beyond `uploading`
+            (normally `deid_running`, `preprocessing`, or `ready`). Dimensions
+            may still be absent while de-identification/preprocessing runs.
             When `if_not_exists=True` and the server reports a dedup hit, the
-            existing row is returned as-is (status may be `preprocessing` or
-            `ready` depending on where the prior upload is in its lifecycle).
+            existing row is returned as-is.
 
         Raises:
             FileNotFoundError: If `path` does not exist.
@@ -275,9 +247,7 @@ class Uploads:
         if not local.is_file():
             raise FileNotFoundError(f"No such file: {local}")
         if chunk_size <= 0 or chunk_size % (256 * 1024) != 0:
-            raise ValueError(
-                "chunk_size must be a positive multiple of 256 KiB (262144 bytes)."
-            )
+            raise ValueError("chunk_size must be a positive multiple of 256 KiB (262144 bytes).")
 
         size = local.stat().st_size
         ct = content_type or _CONTENT_TYPE_BY_EXT.get(local.suffix.lower(), DEFAULT_CONTENT_TYPE)
@@ -300,7 +270,7 @@ class Uploads:
         self._stream_to_gcs(
             session.upload_url, local, size, ct, chunk_size=chunk_size, progress=progress
         )
-        return self._complete(session)
+        return self._wait_for_ingest_start(session)
 
     # ---------- internal helpers ----------
 
@@ -333,9 +303,26 @@ class Uploads:
             return Upload._from_row(raw), True
         return Upload._from_create(raw), False
 
-    def _complete(self, session: Upload) -> Upload:
-        raw = self._http.request_json("POST", f"/uploads/{session.id}/complete")
-        return session._with_completion(raw)
+    def _wait_for_ingest_start(self, session: Upload) -> Upload:
+        deadline = time.monotonic() + _INGEST_START_TIMEOUT_SECONDS
+        while True:
+            current = self.get(session.id)
+            if current.status == "upload_failed":
+                raise UploadError(
+                    "GCS finalized an object whose size did not match the declared upload; "
+                    "create a new upload session and send the complete file.",
+                    error_code="upload_failed",
+                    upload_id=session.id,
+                )
+            if current.status != "uploading":
+                return replace(current, upload_url=session.upload_url)
+            if time.monotonic() >= deadline:
+                raise UploadError(
+                    "The upload reached GCS, but automatic ingest did not start within 120 seconds.",
+                    error_code="ingest_start_timeout",
+                    upload_id=session.id,
+                )
+            time.sleep(_INGEST_POLL_INTERVAL_SECONDS)
 
     def _stream_to_gcs(
         self,
@@ -349,35 +336,37 @@ class Uploads:
     ) -> None:
         # Use a fresh httpx.Client — we're talking to GCS, not our API.
         with (
-            httpx.Client(timeout=httpx.Timeout(connect=15.0, read=600.0, write=600.0, pool=15.0)) as gcs,
+            httpx.Client(
+                timeout=httpx.Timeout(connect=15.0, read=600.0, write=600.0, pool=15.0)
+            ) as gcs,
             path.open("rb") as fh,
         ):
-                pos = 0
-                while pos < size:
-                    chunk = fh.read(chunk_size)
-                    if not chunk:
-                        break
-                    end = pos + len(chunk) - 1
-                    headers = {
-                        "Content-Length": str(len(chunk)),
-                        "Content-Range": f"bytes {pos}-{end}/{size}",
-                        "Content-Type": content_type,
-                    }
-                    resp = gcs.put(upload_url, content=chunk, headers=headers)
-                    if pos + len(chunk) >= size:
-                        # Final chunk — GCS returns 200/201.
-                        if resp.status_code not in (200, 201):
-                            raise UploadError(
-                                f"GCS rejected final chunk: HTTP {resp.status_code} {resp.text[:200]}",
-                                status_code=resp.status_code,
-                            )
-                    else:
-                        # Intermediate chunk — GCS returns 308 Resume Incomplete.
-                        if resp.status_code != 308:
-                            raise UploadError(
-                                f"GCS rejected chunk: HTTP {resp.status_code} {resp.text[:200]}",
-                                status_code=resp.status_code,
-                            )
-                    pos += len(chunk)
-                    if progress is not None:
-                        progress(pos, size)
+            pos = 0
+            while pos < size:
+                chunk = fh.read(chunk_size)
+                if not chunk:
+                    break
+                end = pos + len(chunk) - 1
+                headers = {
+                    "Content-Length": str(len(chunk)),
+                    "Content-Range": f"bytes {pos}-{end}/{size}",
+                    "Content-Type": content_type,
+                }
+                resp = gcs.put(upload_url, content=chunk, headers=headers)
+                if pos + len(chunk) >= size:
+                    # Final chunk — GCS returns 200/201.
+                    if resp.status_code not in (200, 201):
+                        raise UploadError(
+                            f"GCS rejected final chunk: HTTP {resp.status_code} {resp.text[:200]}",
+                            status_code=resp.status_code,
+                        )
+                else:
+                    # Intermediate chunk — GCS returns 308 Resume Incomplete.
+                    if resp.status_code != 308:
+                        raise UploadError(
+                            f"GCS rejected chunk: HTTP {resp.status_code} {resp.text[:200]}",
+                            status_code=resp.status_code,
+                        )
+                pos += len(chunk)
+                if progress is not None:
+                    progress(pos, size)

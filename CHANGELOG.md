@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Release notes on GitHub are extracted from the section header matching the
 published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
+## [Unreleased]
+
+### Added
+
+- Added scoped `client.samples.list(...)`, unified owned/public
+  `client.samples.get(...)`, owned sample job history, and
+  `client.samples.patch(...)` for name, complete tag-set, and MPP updates.
+- Added `client.predict.submit(..., dry_run=True)` with literal overloads for a
+  typed, side-effect-free `Estimate` response.
+- Added `strand samples list|get|patch` and `strand uploads list`.
+- Added CLI dry-run pricing plus top-level `strand wait`, `strand cancel`, and
+  `strand ome-tiff` commands while preserving the existing SDK-native command
+  names.
+
+### Removed
+
+- Removed the `client.public` namespace, per-field sample MPP/tag methods,
+  `client.predict.estimate(...)`, and the `strand public` commands. The
+  superseded names have no aliases or forwarding layers.
+
+### Fixed
+
+- The HTTP User-Agent now reports the installed `strand-sdk` package version.
+
 ## [0.14.0] - 2026-08-13
 
 ### Added

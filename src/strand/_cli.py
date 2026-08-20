@@ -17,9 +17,15 @@ CLI command             SDK call
 ``strand markers``      ``client.markers.list()``
 ``strand predict``      ``client.predict.submit(...)``
 ``strand status``       ``client.jobs.get(...).status``
+``strand wait``         ``client.jobs.get(...).wait(...)``
+``strand cancel``       ``client.jobs.get(...).cancel()``
 ``strand results``      ``client.jobs.get(...).download_results(dir)``
-``strand samples list`` ``client.uploads.list(...)``
-======================  ====================================================
+``strand ome-tiff``     ``client.jobs.get(...).export_ome_tiff(...)``
+``strand samples list`` ``client.samples.list(...)``
+``strand samples get``  ``client.samples.get(...)``
+``strand samples patch`` ``client.samples.patch(...)``
+``strand uploads list`` ``client.uploads.list(...)``
+=======================  ====================================================
 """
 
 from __future__ import annotations
@@ -34,6 +40,8 @@ import typer
 
 from ._client import Client
 from ._errors import StrandError
+from ._public import PublicSample
+from ._samples import SampleScope
 
 app = typer.Typer(
     name="strand",
@@ -48,11 +56,11 @@ samples_app = typer.Typer(
 )
 app.add_typer(samples_app, name="samples")
 
-public_app = typer.Typer(
-    help="Browse and read the free, credit-less public cohort.",
+uploads_app = typer.Typer(
+    help="Inspect resumable upload records.",
     no_args_is_help=True,
 )
-app.add_typer(public_app, name="public")
+app.add_typer(uploads_app, name="uploads")
 
 
 # ---------- shared helpers ----------
@@ -73,7 +81,10 @@ def _fail(message: str) -> NoReturn:
 
 
 def _encode(value: Any) -> Any:
-    """Recursively JSON-ready a dataclass / datetime / Path / container."""
+    """Recursively JSON-ready a model / datetime / Path / container."""
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return _encode(to_dict())
     if is_dataclass(value) and not isinstance(value, type):
         return {k: _encode(v) for k, v in asdict(value).items()}
     if isinstance(value, datetime):
@@ -142,7 +153,10 @@ def upload(
         "takes precedence over the slide's own calibrated scale.",
     ),
 ) -> None:
-    """Upload a local H&E slide. Prints the upload (sample) id and slide dimensions."""
+    """Upload a local H&E slide and print its current ingest status.
+
+    Dimensions may be absent until preprocessing finishes.
+    """
     client = _client()
     try:
         result = client.uploads.upload_file(
@@ -176,15 +190,24 @@ def predict(
         "--model",
         help="Lattice version (e.g. v0.7). Server picks the current default when omitted.",
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Validate and price the request without creating a job or reserving credits.",
+    ),
 ) -> None:
-    """Submit a prediction job (H&E to multiplex). Reserves credits, prints the job id."""
+    """Estimate or submit a prediction job (H&E to multiplex)."""
     marker_list = [m.strip() for m in markers.split(",") if m.strip()]
     if not marker_list:
         raise typer.BadParameter("Provide at least one marker.", param_hint="--markers")
     client = _client()
     try:
-        job = client.predict.submit(sample_id, marker_list, model=model)
-        _emit({"job_id": job.id, "reserved_credits": job.reserved_credits})
+        if dry_run:
+            estimate = client.predict.submit(sample_id, marker_list, model=model, dry_run=True)
+            _emit(estimate)
+        else:
+            job = client.predict.submit(sample_id, marker_list, model=model, dry_run=False)
+            _emit({"job_id": job.id, "reserved_credits": job.reserved_credits})
     except StrandError as exc:
         _fail(str(exc))
     finally:
@@ -200,6 +223,48 @@ def status(
     try:
         job = client.jobs.get(job_id)
         _emit(job.status)
+    except StrandError as exc:
+        _fail(str(exc))
+    finally:
+        client.close()
+
+
+@app.command()
+def wait(
+    job_id: str = typer.Argument(..., help="Job id returned by `strand predict`."),
+    timeout: float | None = typer.Option(
+        None,
+        "--timeout",
+        min=0.0,
+        help="Maximum seconds to wait. Omit to wait indefinitely.",
+    ),
+    poll_interval: float = typer.Option(
+        2.0,
+        "--poll-interval",
+        min=0.001,
+        help="Seconds between status requests when polling is needed.",
+    ),
+) -> None:
+    """Wait for a terminal job status, using SSE with polling fallback."""
+    client = _client()
+    try:
+        job = client.jobs.get(job_id)
+        _emit(job.wait(timeout=timeout, poll_interval=poll_interval))
+    except (StrandError, ValueError) as exc:
+        _fail(str(exc))
+    finally:
+        client.close()
+
+
+@app.command()
+def cancel(
+    job_id: str = typer.Argument(..., help="In-flight job id returned by `strand predict`."),
+) -> None:
+    """Cancel an eligible in-flight job and print its post-cancel status."""
+    client = _client()
+    try:
+        job = client.jobs.get(job_id)
+        _emit(job.cancel())
     except StrandError as exc:
         _fail(str(exc))
     finally:
@@ -228,6 +293,43 @@ def results(
         client.close()
 
 
+@app.command("ome-tiff")
+def ome_tiff(
+    job_id: str = typer.Argument(..., help="Completed job id returned by `strand predict`."),
+    out: Path = typer.Option(
+        ...,
+        "--out",
+        "-o",
+        dir_okay=False,
+        help="Destination OME-TIFF file path. Parent directories are created.",
+    ),
+    timeout: float | None = typer.Option(
+        None,
+        "--timeout",
+        min=0.0,
+        help="Maximum seconds to wait for export. Omit to wait indefinitely.",
+    ),
+    poll_interval: float = typer.Option(
+        2.0,
+        "--poll-interval",
+        min=0.001,
+        help="Seconds between export-status requests.",
+    ),
+) -> None:
+    """Request, wait for, and download a completed job as OME-TIFF."""
+    client = _client()
+    try:
+        job = client.jobs.get(job_id)
+        written = job.export_ome_tiff(
+            str(out), timeout=timeout, poll_interval=poll_interval
+        )
+        _emit({"path": str(written)})
+    except (StrandError, ValueError) as exc:
+        _fail(str(exc))
+    finally:
+        client.close()
+
+
 @app.command()
 def markers() -> None:
     """List the markers your account can request (credit-free)."""
@@ -242,66 +344,124 @@ def markers() -> None:
 
 @samples_app.command("list")
 def samples_list(
+    scope: SampleScope = typer.Option("mine", "--scope", help="Sample scope."),
+    limit: int = typer.Option(48, "--limit", help="Page size (API range 1-100)."),
+    cursor: str | None = typer.Option(
+        None, "--cursor", help="Opaque pagination cursor from a prior response."
+    ),
+    tag: str | None = typer.Option(None, "--tag", help="Exact sample-tag filter."),
+) -> None:
+    """List owned samples, the public cohort, or both."""
+    client = _client()
+    try:
+        _emit(client.samples.list(scope=scope, limit=limit, cursor=cursor, tag=tag))
+    except (StrandError, ValueError) as exc:
+        _fail(str(exc))
+    finally:
+        client.close()
+
+
+@samples_app.command("get")
+def samples_get(
+    sample_id: str = typer.Argument(..., metavar="SAMPLE_ID", help="Owned or public sample id."),
+    download: Path | None = typer.Option(
+        None,
+        "--download",
+        "-d",
+        help="For a public sample, mirror its OME-Zarr store into this directory.",
+    ),
+) -> None:
+    """Show owned detail with job history or public detail by share id."""
+    client = _client()
+    try:
+        sample = client.samples.get(sample_id)
+        if download is not None:
+            if not isinstance(sample, PublicSample):
+                raise ValueError("--download is available only for public samples")
+            detail = sample.to_dict()
+            detail["downloaded_to"] = str(sample.download_to(download))
+            _emit(detail)
+        else:
+            _emit(sample)
+    except (StrandError, ValueError) as exc:
+        _fail(str(exc))
+    finally:
+        client.close()
+
+
+def _sample_patch_updates(
+    *,
+    name: str | None,
+    clear_name: bool,
+    tag: list[str] | None,
+    clear_tags: bool,
+    mpp: float | None,
+) -> dict[str, Any]:
+    if name is not None and clear_name:
+        raise ValueError("--name and --clear-name are mutually exclusive")
+    if tag is not None and clear_tags:
+        raise ValueError("--tag and --clear-tags are mutually exclusive")
+
+    updates: dict[str, Any] = {}
+    if clear_name:
+        updates["name"] = None
+    elif name is not None:
+        updates["name"] = name
+    if clear_tags:
+        updates["tags"] = []
+    elif tag is not None:
+        updates["tags"] = tag
+    if mpp is not None:
+        updates["mpp"] = mpp
+    if not updates:
+        raise ValueError("Provide at least one sample field to patch")
+    return updates
+
+
+@samples_app.command("patch")
+def samples_patch(
+    sample_id: str = typer.Argument(..., metavar="SAMPLE_ID", help="Owned sample id."),
+    name: str | None = typer.Option(None, "--name", help="Set the display name."),
+    clear_name: bool = typer.Option(False, "--clear-name", help="Revert to the filename."),
+    tag: list[str] | None = typer.Option(
+        None, "--tag", help="Complete desired tag set; repeat for multiple tags."
+    ),
+    clear_tags: bool = typer.Option(False, "--clear-tags", help="Clear all editable tags."),
+    mpp: float | None = typer.Option(None, "--mpp", help="Set isotropic microns per pixel."),
+) -> None:
+    """Patch an owned sample's name, complete tag set, and/or physical scale."""
+    try:
+        updates = _sample_patch_updates(
+            name=name,
+            clear_name=clear_name,
+            tag=tag,
+            clear_tags=clear_tags,
+            mpp=mpp,
+        )
+    except ValueError as exc:
+        _fail(str(exc))
+
+    client = _client()
+    try:
+        _emit(client.samples.patch(sample_id, **updates))
+    except (StrandError, ValueError) as exc:
+        _fail(str(exc))
+    finally:
+        client.close()
+
+
+@uploads_app.command("list")
+def uploads_list(
     limit: int = typer.Option(100, "--limit", help="Page size (1-200)."),
     cursor: str | None = typer.Option(
         None, "--cursor", help="Opaque pagination cursor from a prior response."
     ),
 ) -> None:
-    """List uploaded samples for your org, newest first."""
+    """List resumable upload records for your organization."""
     client = _client()
     try:
-        page = client.uploads.list(limit=limit, cursor=cursor)
-        _emit(page)
-    except StrandError as exc:
-        _fail(str(exc))
-    finally:
-        client.close()
-
-
-@public_app.command("list")
-def public_list(
-    page: int | None = typer.Option(None, "--page", help="1-based page number (default 1)."),
-    page_size: int | None = typer.Option(
-        None, "--page-size", help="Items per page (default 48, max 100)."
-    ),
-    tag: str | None = typer.Option(None, "--tag", help="Filter by a public display tag."),
-) -> None:
-    """List the free public cohort (paginated, newest first)."""
-    client = _client()
-    try:
-        _emit(client.public.list(page=page, page_size=page_size, tag=tag))
-    except StrandError as exc:
-        _fail(str(exc))
-    finally:
-        client.close()
-
-
-@public_app.command("get")
-def public_get(
-    public_id: str = typer.Argument(..., help="Public id from `strand public list`."),
-    download: Path | None = typer.Option(
-        None,
-        "--download",
-        "-d",
-        help="Directory to mirror the sample's OME-Zarr (H&E + markers) into.",
-    ),
-) -> None:
-    """Show a public sample's detail; with --download, materialize its marker data."""
-    client = _client()
-    try:
-        sample = client.public.get(public_id)
-        detail: dict[str, Any] = {
-            "public_id": sample.public_id,
-            "title": sample.title,
-            "tags": sample.tags,
-            "metadata": sample.metadata,
-            "geometry": sample.geometry,
-            "markers": sample.markers,
-        }
-        if download is not None:
-            detail["downloaded_to"] = str(sample.download_to(download))
-        _emit(detail)
-    except StrandError as exc:
+        _emit(client.uploads.list(limit=limit, cursor=cursor))
+    except (StrandError, ValueError) as exc:
         _fail(str(exc))
     finally:
         client.close()
