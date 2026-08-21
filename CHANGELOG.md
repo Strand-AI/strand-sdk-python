@@ -10,6 +10,8 @@ published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-08-20
+
 ### Added
 
 - Added owned-sample segmentation lifecycle, idempotent start/retry, artifact
