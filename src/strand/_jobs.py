@@ -7,12 +7,12 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 
 from ._errors import JobFailedError, JobTimeoutError, StrandError
-from ._models import JobStatus, OmeTiffExport, ResultArchiveExport
+from ._models import JobStatus, ResultExport
 from ._results import JobResults
 
 if TYPE_CHECKING:
@@ -294,93 +294,89 @@ class Job:
             return results.to_anndata()
         return results.download_to(path)
 
-    def request_ome_tiff_export(self) -> OmeTiffExport:
-        """Start or reuse an asynchronous OME-TIFF export.
-
-        The request is idempotent. A completed job starts rendering on the
-        first call; later calls return the in-progress or cached export.
-        """
-        raw = self._http.request_json(
-            "POST",
-            f"/jobs/{self.id}/exports/ome-tiff",
-            expected=(200, 202),
-        )
-        return OmeTiffExport._from_dict(raw)
-
-    def get_ome_tiff_export(self) -> OmeTiffExport:
-        """Fetch the current OME-TIFF export status and signed URL, if ready."""
-        raw = self._http.request_json(
-            "GET",
-            f"/jobs/{self.id}/exports/ome-tiff",
-            expected=(200, 202),
-        )
-        return OmeTiffExport._from_dict(raw)
-
-    def request_results_archive(self) -> ResultArchiveExport:
-        """Start or reuse a cached whole-result OME-Zarr ZIP export."""
-        raw = self._http.request_json(
-            "POST",
-            f"/jobs/{self.id}/exports/ome-zarr-zip",
-            expected=(200, 202),
-        )
-        return ResultArchiveExport._from_dict(raw)
-
-    def get_results_archive(self) -> ResultArchiveExport:
-        """Fetch result-archive status and its signed URL when ready."""
-        raw = self._http.request_json(
-            "GET",
-            f"/jobs/{self.id}/exports/ome-zarr-zip",
-            expected=(200, 202),
-        )
-        return ResultArchiveExport._from_dict(raw)
-
-    def export_ome_tiff(
+    def request_export(
         self,
+        format: Literal["ome-zarr", "ome-zarr-zip", "ome-tiff"],
+        *,
+        include_he: bool | None = None,
+        include_segmentation: bool = False,
+    ) -> ResultExport:
+        """Start or reuse one format-driven result export.
+
+        Native ``ome-zarr`` is returned immediately without conversion.
+        ZIP and OME-TIFF generation are asynchronous and idempotent. Set
+        ``include_segmentation`` to attach the latest mask/cell-expression
+        manifest; it is never available for public, read-only samples.
+        """
+        body: dict[str, Any] = {
+            "format": format,
+            "includeSegmentation": include_segmentation,
+        }
+        if include_he is not None:
+            body["includeHe"] = include_he
+        raw = self._http.request_json(
+            "POST", f"/jobs/{self.id}/exports", json=body, expected=(200, 202)
+        )
+        return ResultExport._from_dict(raw)
+
+    def get_export(
+        self,
+        format: Literal["ome-zarr", "ome-zarr-zip", "ome-tiff"],
+        *,
+        include_he: bool | None = None,
+        include_segmentation: bool = False,
+    ) -> ResultExport:
+        """Fetch a format-driven export status and refreshed signed links."""
+        params: dict[str, Any] = {
+            "format": format,
+            "includeSegmentation": str(include_segmentation).lower(),
+        }
+        if include_he is not None:
+            params["includeHe"] = str(include_he).lower()
+        raw = self._http.request_json(
+            "GET", f"/jobs/{self.id}/exports", params=params, expected=(200, 202)
+        )
+        return ResultExport._from_dict(raw)
+
+    def download_export(
+        self,
+        format: Literal["ome-zarr-zip", "ome-tiff"],
         path: str,
         *,
+        include_segmentation: bool = False,
         timeout: float | None = None,
         poll_interval: float = 2.0,
     ) -> Path:
-        """Request, wait for, and download this job's OME-TIFF result.
-
-        Args:
-            path: Destination file path. Parent directories are created.
-            timeout: Maximum seconds to wait. ``None`` waits forever.
-            poll_interval: Seconds between export-status requests.
-
-        Returns:
-            The destination :class:`Path`.
-        """
+        """Request, wait for, and download one generated single-file export."""
         deadline = time.monotonic() + timeout if timeout is not None else None
-        export = self.request_ome_tiff_export()
+        export = self.request_export(
+            format, include_he=True if format == "ome-tiff" else None,
+            include_segmentation=include_segmentation,
+        )
         while export.status != "ready":
             if export.status == "failed":
-                raise StrandError(
-                    export.error or f"OME-TIFF export for job {self.id} failed",
-                    error_code="export_failed",
-                )
+                raise StrandError(export.error or f"{format} export failed", error_code="export_failed")
             if deadline is not None and time.monotonic() >= deadline:
-                raise JobTimeoutError(
-                    f"OME-TIFF export for job {self.id} was not ready within {timeout}s",
-                )
-            sleep_for = poll_interval
-            if deadline is not None:
-                sleep_for = min(sleep_for, max(0.0, deadline - time.monotonic()))
+                raise JobTimeoutError(f"{format} export for job {self.id} was not ready within {timeout}s")
+            sleep_for = poll_interval if deadline is None else min(
+                poll_interval, max(0.0, deadline - time.monotonic())
+            )
             if sleep_for > 0:
                 time.sleep(sleep_for)
-            export = self.get_ome_tiff_export()
+            export = self.get_export(
+                format, include_he=True if format == "ome-tiff" else None,
+                include_segmentation=include_segmentation,
+            )
 
-        if export.download_url is None:
-            raise StrandError("Ready OME-TIFF export did not include a download URL")
-
+        prediction = export.artifacts.get("prediction") or {}
+        download_url = prediction.get("downloadUrl")
+        if not isinstance(download_url, str):
+            raise StrandError(f"Ready {format} export did not include a download URL")
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         download_timeout = httpx.Timeout(connect=60.0, read=None, write=60.0, pool=60.0)
         with httpx.stream(
-            "GET",
-            export.download_url,
-            follow_redirects=True,
-            timeout=download_timeout,
+            "GET", download_url, follow_redirects=True, timeout=download_timeout
         ) as response:
             response.raise_for_status()
             with destination.open("wb") as output:

@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from math import isfinite
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from ._models import Sample, SampleList
+from ._models import Sample, SampleList, SegmentationState
 from ._public import PublicSample
 
 if TYPE_CHECKING:
@@ -109,6 +109,35 @@ class Samples:
         if ownership == "public":
             return PublicSample._from_dict(self._http, payload)
         raise ValueError(f"Unknown sample ownership discriminator: {ownership!r}")
+
+    def segmentation(self, sample_id: str) -> SegmentationState:
+        """Return the owned sample's cell-segmentation lifecycle state."""
+        payload = self._http.request_json("GET", f"/samples/{sample_id}/segmentation")
+        return SegmentationState._from_dict(payload)
+
+    def segment(self, sample_id: str) -> SegmentationState:
+        """Start or retry free cell segmentation for an owned ready sample.
+
+        The operation is idempotent: completed or in-flight work is returned,
+        failed work is retried after the server's cooldown, and public sample
+        identifiers are never mutable.
+        """
+        payload = self._http.request_json(
+            "POST", f"/samples/{sample_id}/segmentation", expected=(200, 202)
+        )
+        return SegmentationState._from_dict(payload)
+
+    def segmentation_manifest(self, sample_id: str, layer_id: str) -> dict[str, Any]:
+        """Return the explicit mask, cell morphology, and expression manifest."""
+        return self._http.request_json(
+            "GET", f"/samples/{sample_id}/segmentation/{layer_id}/manifest"
+        )
+
+    def segmentation_file(self, sample_id: str, layer_id: str, path: str) -> bytes:
+        """Read one mask-Zarr, morphology, expression, or provenance file."""
+        return self._http.request_bytes(
+            "GET", f"/samples/{sample_id}/segmentation/{layer_id}/files/{path.lstrip('/')}"
+        )
 
     def patch(
         self,

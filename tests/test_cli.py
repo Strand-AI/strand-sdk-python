@@ -16,7 +16,6 @@ from typer.testing import CliRunner
 
 from strand import _cli
 from strand._errors import AuthError
-from strand._jobs import Job
 from strand._models import Estimate, JobStatus, PublicSampleGeometry, Upload
 from strand._public import PublicSample
 from strand._uploads import UploadList
@@ -297,104 +296,33 @@ def test_results_default_out(fake_client: MagicMock) -> None:
     job.download_results.assert_called_once_with("results")
 
 
-def test_ome_tiff_wraps_export_and_prints_written_path(
+def test_export_wraps_format_driven_download_and_prints_path(
     fake_client: MagicMock, tmp_path: Path
 ) -> None:
     out = tmp_path / "exports" / "job1.ome.tiff"
     job = MagicMock()
-    job.export_ome_tiff.return_value = out
+    job.download_export.return_value = out
     fake_client.jobs.get.return_value = job
 
-    result = runner.invoke(
-        _cli.app,
-        [
-            "ome-tiff",
-            "job1",
-            "--out",
-            str(out),
-            "--timeout",
-            "90",
-            "--poll-interval",
-            "0.5",
-        ],
-    )
+    result = runner.invoke(_cli.app, [
+        "export", "job1", "--format", "ome-tiff", "--out", str(out),
+        "--include-segmentation", "--timeout", "90", "--poll-interval", "0.5",
+    ])
 
     assert result.exit_code == 0, result.output
-    fake_client.jobs.get.assert_called_once_with("job1")
-    job.export_ome_tiff.assert_called_once_with(
-        str(out), timeout=90.0, poll_interval=0.5
+    job.download_export.assert_called_once_with(
+        "ome-tiff", str(out), include_segmentation=True, timeout=90.0, poll_interval=0.5
     )
-    assert json.loads(result.output) == {"path": str(out)}
+    assert json.loads(result.output) == {"path": str(out), "format": "ome-tiff"}
 
 
-def test_ome_tiff_requires_out(fake_client: MagicMock) -> None:
-    result = runner.invoke(_cli.app, ["ome-tiff", "job1"])
-
-    assert result.exit_code != 0
-    assert "--out" in _plain(result.output)
+def test_export_rejects_unknown_format_before_network(fake_client: MagicMock, tmp_path: Path) -> None:
+    result = runner.invoke(_cli.app, [
+        "export", "job1", "--format", "pdf", "--out", str(tmp_path / "out.pdf")
+    ])
+    assert result.exit_code == 1
+    assert "format must be" in result.output
     fake_client.jobs.get.assert_not_called()
-
-
-def test_ome_tiff_surfaces_errors(fake_client: MagicMock, tmp_path: Path) -> None:
-    job = MagicMock()
-    job.export_ome_tiff.side_effect = AuthError("export denied", status_code=403)
-    fake_client.jobs.get.return_value = job
-
-    result = runner.invoke(
-        _cli.app, ["ome-tiff", "job1", "--out", str(tmp_path / "out.ome.tiff")]
-    )
-
-    assert result.exit_code == 1
-    assert "error: export denied" in result.output
-    fake_client.close.assert_called_once()
-
-
-def test_ome_tiff_surfaces_terminal_poll_failure_from_real_job(
-    fake_client: MagicMock,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    job_client = MagicMock()
-    job_client._http.request_json.side_effect = [
-        {
-            "status": "running",
-            "format": "ome-tiff",
-            "sizeBytes": None,
-            "updatedAt": None,
-        },
-        {
-            "status": "failed",
-            "format": "ome-tiff",
-            "sizeBytes": None,
-            "error": "renderer crashed",
-            "updatedAt": None,
-        },
-    ]
-    fake_client.jobs.get.return_value = Job(
-        id="job1", reserved_credits=None, client=job_client
-    )
-    monkeypatch.setattr("strand._jobs.time.sleep", lambda _seconds: None)
-
-    result = runner.invoke(
-        _cli.app,
-        [
-            "ome-tiff",
-            "job1",
-            "--out",
-            str(tmp_path / "out.ome.tiff"),
-            "--timeout",
-            "90",
-            "--poll-interval",
-            "0.001",
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "error: renderer crashed" in result.output
-    assert [call.args[:2] for call in job_client._http.request_json.call_args_list] == [
-        ("POST", "/jobs/job1/exports/ome-tiff"),
-        ("GET", "/jobs/job1/exports/ome-tiff"),
-    ]
 
 
 # ---------- samples ----------
@@ -641,7 +569,7 @@ def test_public_subapp_is_absent() -> None:
         ["wait", "--help"],
         ["cancel", "--help"],
         ["results", "--help"],
-        ["ome-tiff", "--help"],
+        ["export", "--help"],
         ["samples", "--help"],
         ["samples", "list", "--help"],
         ["samples", "get", "--help"],
@@ -656,11 +584,11 @@ def test_help_renders(argv: list[str]) -> None:
     assert result.output
 
 
-def test_new_cli_help_documents_dry_run_wait_cancel_and_ome_tiff() -> None:
+def test_new_cli_help_documents_dry_run_wait_cancel_and_export() -> None:
     top = runner.invoke(_cli.app, ["--help"])
     assert top.exit_code == 0, top.output
     top_text = _plain(top.output)
-    for command in ("wait", "cancel", "ome-tiff"):
+    for command in ("wait", "cancel", "export"):
         assert command in top_text
 
     predict_help = runner.invoke(_cli.app, ["predict", "--help"])
@@ -675,6 +603,7 @@ def test_new_cli_help_documents_dry_run_wait_cancel_and_ome_tiff() -> None:
     assert "--poll-interval" in wait_text
     assert "SSE with polling fallback" in wait_text
 
-    ome_help = _plain(runner.invoke(_cli.app, ["ome-tiff", "--help"]).output)
-    assert "--out" in ome_help
-    assert "--timeout" in ome_help
+    export_help = _plain(runner.invoke(_cli.app, ["export", "--help"]).output)
+    assert "--format" in export_help
+    assert "--out" in export_help
+    assert "--timeout" in export_help

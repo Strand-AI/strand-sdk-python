@@ -82,10 +82,14 @@ SPEC_COVERAGE: dict[str, tuple[Any, dict[str, str]]] = {
         JobResults.download_to,
         {"id": BOUND, "path": DERIVED},  # remote paths come from the zarr listing
     ),
-    "POST /jobs/{id}/exports/ome-tiff": (Job.request_ome_tiff_export, {"id": BOUND}),
-    "GET /jobs/{id}/exports/ome-tiff": (Job.get_ome_tiff_export, {"id": BOUND}),
-    "POST /jobs/{id}/exports/ome-zarr-zip": (Job.request_results_archive, {"id": BOUND}),
-    "GET /jobs/{id}/exports/ome-zarr-zip": (Job.get_results_archive, {"id": BOUND}),
+    "POST /jobs/{id}/exports": (
+        Job.request_export,
+        {"id": BOUND, "format": "format", "includeHe": "include_he", "includeSegmentation": "include_segmentation"},
+    ),
+    "GET /jobs/{id}/exports": (
+        Job.get_export,
+        {"id": BOUND, "format": "format", "includeHe": "include_he", "includeSegmentation": "include_segmentation"},
+    ),
     "GET /samples": (
         Samples.list,
         {"scope": "scope", "limit": "limit", "cursor": "cursor", "tag": "tag"},
@@ -94,6 +98,16 @@ SPEC_COVERAGE: dict[str, tuple[Any, dict[str, str]]] = {
     "PATCH /samples/{id}": (
         Samples.patch,
         {"id": "sample_id", "name": "name", "tags": "tags", "mpp": "mpp"},
+    ),
+    "GET /samples/{id}/segmentation": (Samples.segmentation, {"id": "sample_id"}),
+    "POST /samples/{id}/segmentation": (Samples.segment, {"id": "sample_id"}),
+    "GET /samples/{id}/segmentation/{layerId}/manifest": (
+        Samples.segmentation_manifest,
+        {"id": "sample_id", "layerId": "layer_id"},
+    ),
+    "GET /samples/{id}/segmentation/{layerId}/files/{path}": (
+        Samples.segmentation_file,
+        {"id": "sample_id", "layerId": "layer_id", "path": "path"},
     ),
     "PATCH /samples/{id}/expiration": (
         Samples.set_expiration,

@@ -62,6 +62,10 @@
           "required": {
             "type": "integer",
             "nullable": true
+          },
+          "retryAfterSeconds": {
+            "type": "integer",
+            "nullable": true
           }
         }
       },
@@ -430,6 +434,165 @@
           }
         }
       },
+      "SegmentationState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "retryable",
+          "creditCost",
+          "job",
+          "layer"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_started",
+              "queued",
+              "running",
+              "postprocessing",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "creditCost": {
+            "type": "integer",
+            "enum": [
+              0
+            ],
+            "description": "Segmentation is credit-free."
+          },
+          "job": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
+          "layer": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          }
+        }
+      },
+      "SegmentationManifest": {
+        "type": "object",
+        "description": "Explicit per-cell contract. Mask pixels are uint32 local labels; morphology and marker Parquet tables join by instance_id. This is distinct from pixel-grid prediction matrices.",
+        "required": [
+          "schemaVersion",
+          "layerId",
+          "entityType",
+          "modelVersion",
+          "coordinateFrame",
+          "instanceCount",
+          "createdAt",
+          "artifacts"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "type": "string",
+            "enum": [
+              "1.0"
+            ]
+          },
+          "layerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entityType": {
+            "type": "string"
+          },
+          "modelVersion": {
+            "type": "string"
+          },
+          "coordinateFrame": {
+            "type": "string"
+          },
+          "instanceCount": {
+            "type": "integer",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "artifacts": {
+            "type": "object",
+            "description": "Authenticated mask OME-Zarr, morphology Parquet, per-marker expression Parquet, and provenance URLs.",
+            "additionalProperties": true
+          }
+        }
+      },
+      "ResultExport": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "status",
+          "format",
+          "selection",
+          "expiresAt",
+          "retryable",
+          "error",
+          "artifacts"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "type": "string",
+            "enum": [
+              "1.0"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "ready",
+              "failed"
+            ]
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "ome-zarr",
+              "ome-zarr-zip",
+              "ome-tiff"
+            ]
+          },
+          "selection": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "includeHe": {
+                "type": "boolean"
+              },
+              "includeSegmentation": {
+                "type": "boolean"
+              }
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "artifacts": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
       "ExpirationUpdate": {
         "type": "object",
         "description": "Provide exactly one of `expiresAt`, `neverExpire: true`, or `useOrgDefault: true`. `neverExpire: true` is sugar for `expiresAt: null` (custom). `useOrgDefault: true` clears the custom expiration and follows the org's default policy.",
@@ -565,7 +728,8 @@
           "willExpire",
           "trashedAt",
           "jobs",
-          "jobCount"
+          "jobCount",
+          "segmentation"
         ],
         "properties": {
           "ownership": {
@@ -664,6 +828,9 @@
             "type": "integer",
             "minimum": 0,
             "description": "Total inference-job count for the sample before the 50-job cap."
+          },
+          "segmentation": {
+            "$ref": "#/components/schemas/SegmentationState"
           }
         }
       },
@@ -1485,10 +1652,21 @@
         }
       }
     },
-    "/jobs/{id}/exports/ome-tiff": {
+    "/jobs/{id}/exports": {
       "post": {
-        "summary": "Request an OME-TIFF export",
-        "description": "Starts an asynchronous OME-TIFF export for a completed job. The request is idempotent: an in-progress or cached export is returned instead of starting a duplicate. Poll this same path with GET while the response status is `pending` or `running`.",
+        "summary": "Request a format-driven result export",
+        "description": "One operation selects native OME-Zarr (no conversion), cached OME-Zarr ZIP, or cached OME-TIFF. includeHe optionally attaches source H&E where supported; includeSegmentation attaches the latest mask and true per-cell geometry, morphology, and marker-expression manifest. Requests are idempotent, credit-free, and failed asynchronous exports are retryable by repeating POST.",
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "OAuth2": [
+              "jobs:write",
+              "results:read"
+            ]
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -1500,29 +1678,80 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "format"
+                ],
+                "properties": {
+                  "format": {
+                    "type": "string",
+                    "enum": [
+                      "ome-zarr",
+                      "ome-zarr-zip",
+                      "ome-tiff"
+                    ]
+                  },
+                  "includeHe": {
+                    "type": "boolean"
+                  },
+                  "includeSegmentation": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
-            "description": "Cached export is ready",
+            "description": "Native or cached result ready",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OmeTiffExport"
+                  "$ref": "#/components/schemas/ResultExport"
                 }
               }
             }
           },
           "202": {
-            "description": "Export is pending or running",
+            "description": "Export pending or running",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OmeTiffExport"
+                  "$ref": "#/components/schemas/ResultExport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request body or invalid selection value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "Missing or invalid API key",
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "OAuth token lacks a required scope",
             "content": {
               "application/json": {
                 "schema": {
@@ -1542,7 +1771,7 @@
             }
           },
           "409": {
-            "description": "Job has not completed",
+            "description": "Job has no completed results",
             "content": {
               "application/json": {
                 "schema": {
@@ -1551,12 +1780,12 @@
               }
             }
           },
-          "500": {
-            "description": "The last export attempt failed",
+          "422": {
+            "description": "Format cannot honor the selected contents",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OmeTiffExport"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1564,8 +1793,19 @@
         }
       },
       "get": {
-        "summary": "Get OME-TIFF export status",
-        "description": "Returns export status and, when ready, a one-hour signed download URL. Returns 404 `not_started` until an export has been requested with POST.",
+        "summary": "Get format-driven result export status",
+        "description": "Poll an asynchronous export and refresh expiring signed URLs.",
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "OAuth2": [
+              "jobs:read",
+              "results:read"
+            ]
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -1575,100 +1815,79 @@
               "type": "string",
               "format": "uuid"
             }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Export is ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OmeTiffExport"
-                }
-              }
-            }
           },
-          "202": {
-            "description": "Export is pending or running",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OmeTiffExport"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Missing or invalid API key",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Job not found or export not started",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "The last export attempt failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OmeTiffExport"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/jobs/{id}/exports/ome-zarr-zip": {
-      "post": {
-        "summary": "Request a whole-result OME-Zarr ZIP export",
-        "description": "Starts or reuses a cached ZIP archive of the completed job's OME-Zarr tree. Poll this path with GET while pending or running.",
-        "parameters": [
           {
-            "name": "id",
-            "in": "path",
+            "name": "format",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string",
-              "format": "uuid"
+              "enum": [
+                "ome-zarr",
+                "ome-zarr-zip",
+                "ome-tiff"
+              ]
+            }
+          },
+          {
+            "name": "includeHe",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "includeSegmentation",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
             }
           }
         ],
         "responses": {
           "200": {
-            "description": "Cached archive is ready",
+            "description": "Result ready",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResultArchiveExport"
+                  "$ref": "#/components/schemas/ResultExport"
                 }
               }
             }
           },
           "202": {
-            "description": "Archive is pending or running",
+            "description": "Export pending or running",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResultArchiveExport"
+                  "$ref": "#/components/schemas/ResultExport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid selection value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
           "401": {
-            "description": "Missing or invalid API key",
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "OAuth token lacks a required scope",
             "content": {
               "application/json": {
                 "schema": {
@@ -1678,7 +1897,7 @@
             }
           },
           "404": {
-            "description": "Job not found",
+            "description": "Job or export not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -1688,7 +1907,7 @@
             }
           },
           "409": {
-            "description": "Job has not completed",
+            "description": "Job has no completed results",
             "content": {
               "application/json": {
                 "schema": {
@@ -1697,79 +1916,12 @@
               }
             }
           },
-          "500": {
-            "description": "The last archive attempt failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResultArchiveExport"
-                }
-              }
-            }
-          }
-        }
-      },
-      "get": {
-        "summary": "Get result archive status",
-        "description": "Returns archive status and, when ready, a one-hour signed download URL.",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Archive is ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResultArchiveExport"
-                }
-              }
-            }
-          },
-          "202": {
-            "description": "Archive is pending or running",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResultArchiveExport"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Missing or invalid API key",
+          "422": {
+            "description": "Format cannot honor the selected contents",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Job not found or archive not started",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "The last archive attempt failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResultArchiveExport"
                 }
               }
             }
@@ -1937,6 +2089,380 @@
           },
           "500": {
             "description": "The sample update committed but its MPP tissue recount could not be enqueued. Retry the identical patch to re-attempt the idempotent recount.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/samples/{id}/segmentation": {
+      "get": {
+        "summary": "Get cell-segmentation lifecycle",
+        "description": "Credit-free owned-sample state. Public sample handles are read-only and resolve as not found on this mutation-capable surface.",
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "OAuth2": [
+              "samples:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lifecycle state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SegmentationState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "OAuth token lacks a required scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Owned sample not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Start or retry cell segmentation",
+        "description": "State-idempotent and credit-free. Reuses completed/active work, retries failed work after a 60-second cooldown, and rejects non-ready, archived, cross-org, and public samples.",
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "OAuth2": [
+              "samples:read",
+              "samples:write"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Existing completed or active work",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SegmentationState"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Start/retry queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SegmentationState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "OAuth token lacks a required scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Owned sample not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sample not ready or archived",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Retry cooldown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Segmentation is not configured in this environment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/samples/{id}/segmentation/{layerId}/manifest": {
+      "get": {
+        "summary": "Get segmentation artifact manifest",
+        "description": "Returns mask OME-Zarr and true per-cell Parquet contracts. Marker-expression tables join morphology by instance_id; they are not pixel-grid AnnData.",
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "OAuth2": [
+              "samples:read",
+              "results:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "layerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Artifact manifest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SegmentationManifest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "OAuth token lacks a required scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Layer not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Layer not complete",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/samples/{id}/segmentation/{layerId}/files/{path}": {
+      "get": {
+        "summary": "Read one segmentation artifact file",
+        "description": "Bearer-authenticated, org-scoped byte proxy for the paths declared by the segmentation manifest.",
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "OAuth2": [
+              "samples:read",
+              "results:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "layerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Artifact bytes",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid artifact path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "OAuth token lacks a required scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Artifact not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Storage proxy failure",
             "content": {
               "application/json": {
                 "schema": {

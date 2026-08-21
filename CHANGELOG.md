@@ -10,6 +10,19 @@ published version (e.g. `## [0.1.0]`), so keep headers in that exact form.
 
 ## [Unreleased]
 
+### Added
+
+- Added owned-sample segmentation lifecycle, idempotent start/retry, artifact
+  manifests, and authenticated mask/cell-feature byte reads.
+- Added one format-driven result export API for native OME-Zarr, cached
+  OME-Zarr ZIP, and OME-TIFF with optional H&E and segmentation contents.
+
+### Removed
+
+- Removed the format-specific OME-TIFF/result-archive methods and `strand
+  ome-tiff` command. Use `Job.request_export()`, `Job.get_export()`,
+  `Job.download_export()`, and `strand export` without compatibility aliases.
+
 ## [0.15.0] - 2026-08-20
 
 ### Added

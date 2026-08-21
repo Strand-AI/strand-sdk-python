@@ -33,7 +33,7 @@ done
 strand predict "$sample_id" -m CD8,PanCK --dry-run
 job_id=$(strand predict "$sample_id" -m CD8,PanCK | jq -r .job_id)
 strand wait "$job_id" --timeout 1800
-strand ome-tiff "$job_id" --out result.ome.tiff --timeout 1800
+strand export "$job_id" --format ome-tiff --out result.ome.tiff --timeout 1800
 ```
 
 Use `strand cancel "$job_id"` for an eligible in-flight run and `strand

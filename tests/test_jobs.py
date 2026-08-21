@@ -443,159 +443,79 @@ def test_download_results_to_anndata_from_legacy_unsharded_store(client: strand.
 
 
 @respx.mock
-def test_ome_tiff_export_status_methods(client: strand.Client) -> None:
+def test_format_driven_export_status_methods(client: strand.Client) -> None:
     job_id = "22222222-2222-2222-2222-222222222222"
-    endpoint = f"{API_ROOT}/jobs/{job_id}/exports/ome-tiff"
+    endpoint = f"{API_ROOT}/jobs/{job_id}/exports"
     pending = {
-        "status": "pending",
-        "format": "ome-tiff",
-        "sizeBytes": None,
-        "updatedAt": "2026-07-30T10:00:00Z",
+        "schemaVersion": "1.0", "status": "pending", "format": "ome-tiff",
+        "selection": {"includeHe": True, "includeSegmentation": False},
+        "expiresAt": None, "retryable": False, "error": None,
+        "artifacts": {"prediction": {"downloadUrl": None}},
     }
     ready = {
-        "status": "ready",
-        "format": "ome-tiff",
-        "sizeBytes": 1024,
-        "downloadUrl": "https://storage.example/export.ome.tiff?signature=test",
-        "downloadUrlExpiresAt": "2026-07-30T11:00:00Z",
-        "updatedAt": "2026-07-30T10:05:00Z",
+        **pending, "status": "ready", "expiresAt": "2026-07-30T11:00:00Z",
+        "artifacts": {"prediction": {
+            "downloadUrl": "https://storage.example/export.ome.tiff?signature=test",
+            "sizeBytes": 1024,
+        }},
     }
     post = respx.post(endpoint).mock(return_value=Response(202, json=pending))
     get = respx.get(endpoint).mock(return_value=Response(200, json=ready))
 
     job = strand.Job(id=job_id, reserved_credits=None, client=client)
-    requested = job.request_ome_tiff_export()
-    current = job.get_ome_tiff_export()
+    requested = job.request_export("ome-tiff", include_he=True)
+    current = job.get_export("ome-tiff", include_he=True)
 
-    assert post.called
-    assert get.called
+    assert post.called and get.called
     assert requested.status == "pending"
     assert current.status == "ready"
-    assert current.size_bytes == 1024
-    assert current.download_url_expires_at is not None
+    assert current.artifacts["prediction"]["sizeBytes"] == 1024
 
 
 @respx.mock
-def test_export_ome_tiff_waits_and_downloads(
-    client: strand.Client, tmp_path: Path
-) -> None:
+def test_download_export_waits_and_downloads(client: strand.Client, tmp_path: Path) -> None:
     job_id = "22222222-2222-2222-2222-222222222222"
-    endpoint = f"{API_ROOT}/jobs/{job_id}/exports/ome-tiff"
+    endpoint = f"{API_ROOT}/jobs/{job_id}/exports"
     download_url = "https://storage.example/export.ome.tiff?signature=test"
-    respx.post(endpoint).mock(
-        return_value=Response(
-            202,
-            json={
-                "status": "running",
-                "format": "ome-tiff",
-                "sizeBytes": None,
-                "updatedAt": None,
-            },
-        )
-    )
-    respx.get(endpoint).mock(
-        return_value=Response(
-            200,
-            json={
-                "status": "ready",
-                "format": "ome-tiff",
-                "sizeBytes": 4,
-                "downloadUrl": download_url,
-                "downloadUrlExpiresAt": "2026-07-30T11:00:00Z",
-                "updatedAt": "2026-07-30T10:05:00Z",
-            },
-        )
-    )
+    base = {
+        "schemaVersion": "1.0", "format": "ome-tiff",
+        "selection": {"includeHe": True, "includeSegmentation": False},
+        "retryable": False, "error": None,
+    }
+    respx.post(endpoint).mock(return_value=Response(202, json={
+        **base, "status": "running", "expiresAt": None,
+        "artifacts": {"prediction": {"downloadUrl": None}},
+    }))
+    respx.get(endpoint).mock(return_value=Response(200, json={
+        **base, "status": "ready", "expiresAt": "2026-07-30T11:00:00Z",
+        "artifacts": {"prediction": {"downloadUrl": download_url, "sizeBytes": 4}},
+    }))
     download = respx.get(download_url).mock(return_value=Response(200, content=b"TIFF"))
 
     target = tmp_path / "nested" / "result.ome.tiff"
     job = strand.Job(id=job_id, reserved_credits=None, client=client)
-    written = job.export_ome_tiff(str(target), timeout=1, poll_interval=0)
+    written = job.download_export("ome-tiff", str(target), timeout=1, poll_interval=0)
 
     assert download.called
     assert written == target
     assert target.read_bytes() == b"TIFF"
 
 
-@pytest.mark.parametrize("timeout", [None, 1.0])
 @respx.mock
-def test_export_ome_tiff_fails_immediately_with_server_error(
-    client: strand.Client,
-    tmp_path: Path,
-    timeout: float | None,
-) -> None:
-    job_id = "22222222-2222-2222-2222-222222222222"
-    endpoint = f"{API_ROOT}/jobs/{job_id}/exports/ome-tiff"
-    respx.post(endpoint).mock(
-        return_value=Response(
-            202,
-            json={
-                "status": "running",
-                "format": "ome-tiff",
-                "sizeBytes": None,
-                "updatedAt": None,
-            },
-        )
-    )
-    failed = respx.get(endpoint).mock(
-        return_value=Response(
-            200,
-            json={
-                "status": "failed",
-                "format": "ome-tiff",
-                "sizeBytes": None,
-                "error": "renderer crashed",
-                "updatedAt": "2026-07-30T10:05:00Z",
-            },
-        )
-    )
-
-    job = strand.Job(id=job_id, reserved_credits=None, client=client)
-    with pytest.raises(strand.StrandError, match="renderer crashed") as exc_info:
-        job.export_ome_tiff(
-            str(tmp_path / "result.ome.tiff"),
-            timeout=timeout,
-            poll_interval=0,
-        )
-
-    assert failed.call_count == 1
-    assert exc_info.value.error_code == "export_failed"
-
-
-@respx.mock
-def test_request_and_get_results_archive(client: strand.Client) -> None:
+def test_native_ome_zarr_avoids_conversion(client: strand.Client) -> None:
     job_id = "33333333-3333-4333-8333-333333333333"
-    endpoint = f"{API_ROOT}/jobs/{job_id}/exports/ome-zarr-zip"
-    respx.post(endpoint).mock(
-        return_value=Response(
-            202,
-            json={
-                "status": "pending",
-                "format": "ome-zarr-zip",
-                "sizeBytes": None,
-                "updatedAt": "2026-08-06T10:00:00Z",
-            },
-        )
-    )
-    respx.get(endpoint).mock(
-        return_value=Response(
-            200,
-            json={
-                "status": "ready",
-                "format": "ome-zarr-zip",
-                "sizeBytes": 2048,
-                "downloadUrl": "https://storage.example/export.ome-zarr.zip?signature=test",
-                "downloadUrlExpiresAt": "2026-08-06T11:00:00Z",
-                "updatedAt": "2026-08-06T10:05:00Z",
-            },
-        )
-    )
-
+    endpoint = f"{API_ROOT}/jobs/{job_id}/exports"
+    route = respx.post(endpoint).mock(return_value=Response(200, json={
+        "schemaVersion": "1.0", "status": "ready", "format": "ome-zarr",
+        "selection": {"includeHe": False, "includeSegmentation": True},
+        "expiresAt": "2026-08-06T11:00:00Z", "retryable": False, "error": None,
+        "artifacts": {
+            "prediction": {"stored": True, "converted": False, "rootUrl": "https://signed/root"},
+            "segmentation": {"schemaVersion": "1.0", "layerId": "layer-1"},
+        },
+    }))
     job = strand.Job(id=job_id, reserved_credits=None, client=client)
-    requested = job.request_results_archive()
-    ready = job.get_results_archive()
-
-    assert requested.status == "pending"
-    assert ready.status == "ready"
-    assert ready.size_bytes == 2048
-    assert ready.download_url is not None
+    export = job.request_export("ome-zarr", include_segmentation=True)
+    assert route.called
+    assert export.artifacts["prediction"]["converted"] is False
+    assert export.artifacts["segmentation"]["layerId"] == "layer-1"

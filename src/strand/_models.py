@@ -286,6 +286,52 @@ class SampleJob:
 
 
 @dataclass(frozen=True, slots=True)
+class SegmentationState:
+    """Cell-segmentation lifecycle and the latest materialized layer."""
+
+    status: str
+    retryable: bool
+    credit_cost: int
+    job: dict[str, Any] | None
+    layer: dict[str, Any] | None
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> SegmentationState:
+        return cls(
+            status=str(raw.get("status", "not_started")),
+            retryable=bool(raw.get("retryable", False)),
+            credit_cost=int(raw.get("creditCost", 0)),
+            job=dict(raw["job"]) if isinstance(raw.get("job"), dict) else None,
+            layer=dict(raw["layer"]) if isinstance(raw.get("layer"), dict) else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ResultExport:
+    """Format-driven result/export manifest returned by the platform."""
+
+    status: str
+    format: Literal["ome-zarr", "ome-zarr-zip", "ome-tiff"]
+    selection: dict[str, bool]
+    artifacts: dict[str, Any]
+    expires_at: datetime | None
+    retryable: bool
+    error: str | None
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> ResultExport:
+        return cls(
+            status=str(raw["status"]),
+            format=str(raw["format"]),  # type: ignore[arg-type]
+            selection=dict(raw.get("selection") or {}),
+            artifacts=dict(raw.get("artifacts") or {}),
+            expires_at=_parse_dt(raw.get("expiresAt")),
+            retryable=bool(raw.get("retryable", False)),
+            error=str(raw["error"]) if raw.get("error") is not None else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class Sample:
     """An owned sample's detail, from `client.samples.get(sample_id)`.
 
@@ -339,6 +385,7 @@ class Sample:
     trashed_at: datetime | None
     jobs: list[SampleJob]
     job_count: int
+    segmentation: SegmentationState
 
     @classmethod
     def _from_dict(cls, raw: dict[str, Any]) -> Sample:
@@ -369,6 +416,7 @@ class Sample:
             trashed_at=_parse_dt(raw.get("trashedAt")),
             jobs=[SampleJob._from_dict(job) for job in raw["jobs"]],
             job_count=int(raw["jobCount"]),
+            segmentation=SegmentationState._from_dict(dict(raw.get("segmentation") or {})),
         )
 
 
@@ -420,62 +468,6 @@ class JobStatus:
     @property
     def is_terminal(self) -> bool:
         return self.status in {"completed", "partial_failed", "failed", "cancelled"}
-
-
-@dataclass(frozen=True, slots=True)
-class OmeTiffExport:
-    """Point-in-time status for a job's asynchronous OME-TIFF export."""
-
-    status: Literal["pending", "running", "ready", "failed"]
-    format: Literal["ome-tiff"]
-    size_bytes: int | None
-    download_url: str | None
-    download_url_expires_at: datetime | None
-    error: str | None
-    updated_at: datetime | None
-
-    @classmethod
-    def _from_dict(cls, raw: dict[str, Any]) -> OmeTiffExport:
-        size_raw = raw.get("sizeBytes")
-        return cls(
-            status=str(raw["status"]),  # type: ignore[arg-type]
-            format=str(raw["format"]),  # type: ignore[arg-type]
-            size_bytes=int(size_raw) if isinstance(size_raw, int) else None,
-            download_url=(
-                str(raw["downloadUrl"]) if raw.get("downloadUrl") is not None else None
-            ),
-            download_url_expires_at=_parse_dt(raw.get("downloadUrlExpiresAt")),
-            error=str(raw["error"]) if raw.get("error") is not None else None,
-            updated_at=_parse_dt(raw.get("updatedAt")),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class ResultArchiveExport:
-    """Point-in-time status for a whole-result OME-Zarr ZIP export."""
-
-    status: Literal["pending", "running", "ready", "failed"]
-    format: Literal["ome-zarr-zip"]
-    size_bytes: int | None
-    download_url: str | None
-    download_url_expires_at: datetime | None
-    error: str | None
-    updated_at: datetime | None
-
-    @classmethod
-    def _from_dict(cls, raw: dict[str, Any]) -> ResultArchiveExport:
-        size_raw = raw.get("sizeBytes")
-        return cls(
-            status=str(raw["status"]),  # type: ignore[arg-type]
-            format=str(raw["format"]),  # type: ignore[arg-type]
-            size_bytes=int(size_raw) if isinstance(size_raw, int) else None,
-            download_url=(
-                str(raw["downloadUrl"]) if raw.get("downloadUrl") is not None else None
-            ),
-            download_url_expires_at=_parse_dt(raw.get("downloadUrlExpiresAt")),
-            error=str(raw["error"]) if raw.get("error") is not None else None,
-            updated_at=_parse_dt(raw.get("updatedAt")),
-        )
 
 
 @dataclass(frozen=True, slots=True)

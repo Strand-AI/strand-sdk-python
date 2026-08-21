@@ -20,7 +20,7 @@ CLI command             SDK call
 ``strand wait``         ``client.jobs.get(...).wait(...)``
 ``strand cancel``       ``client.jobs.get(...).cancel()``
 ``strand results``      ``client.jobs.get(...).download_results(dir)``
-``strand ome-tiff``     ``client.jobs.get(...).export_ome_tiff(...)``
+``strand export``       ``client.jobs.get(...).download_export(...)``
 ``strand samples list`` ``client.samples.list(...)``
 ``strand samples get``  ``client.samples.get(...)``
 ``strand samples patch`` ``client.samples.patch(...)``
@@ -293,21 +293,29 @@ def results(
         client.close()
 
 
-@app.command("ome-tiff")
-def ome_tiff(
+@app.command("export")
+def export_result(
     job_id: str = typer.Argument(..., help="Completed job id returned by `strand predict`."),
+    format: str = typer.Option(
+        ...,
+        "--format",
+        help="Single-file format: ome-zarr-zip or ome-tiff.",
+    ),
     out: Path = typer.Option(
         ...,
         "--out",
         "-o",
         dir_okay=False,
-        help="Destination OME-TIFF file path. Parent directories are created.",
+        help="Destination file path. Parent directories are created.",
+    ),
+    include_segmentation: bool = typer.Option(
+        False, "--include-segmentation", help="Attach segmentation manifest metadata."
     ),
     timeout: float | None = typer.Option(
         None,
         "--timeout",
         min=0.0,
-        help="Maximum seconds to wait for export. Omit to wait indefinitely.",
+        help="Maximum seconds to wait. Omit to wait indefinitely.",
     ),
     poll_interval: float = typer.Option(
         2.0,
@@ -316,14 +324,20 @@ def ome_tiff(
         help="Seconds between export-status requests.",
     ),
 ) -> None:
-    """Request, wait for, and download a completed job as OME-TIFF."""
+    """Request, wait for, and download one generated result format."""
+    if format not in {"ome-zarr-zip", "ome-tiff"}:
+        _fail("format must be ome-zarr-zip or ome-tiff")
     client = _client()
     try:
         job = client.jobs.get(job_id)
-        written = job.export_ome_tiff(
-            str(out), timeout=timeout, poll_interval=poll_interval
+        written = job.download_export(
+            format,  # type: ignore[arg-type]
+            str(out),
+            include_segmentation=include_segmentation,
+            timeout=timeout,
+            poll_interval=poll_interval,
         )
-        _emit({"path": str(written)})
+        _emit({"path": str(written), "format": format})
     except (StrandError, ValueError) as exc:
         _fail(str(exc))
     finally:
